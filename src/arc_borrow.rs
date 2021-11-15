@@ -356,3 +356,22 @@ impl<T> AsRef<T> for OffsetArcBorrow<'_, T> {
         &**self
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn borrow_count() {
+        let mut borrows = Vec::with_capacity(100);
+        let x = Arc::new(76);
+        let y = Arc::borrow_arc(&x);
+        assert_eq!(Arc::count(&x), 1);
+        assert_eq!(ArcBorrow::count(y), 1);
+        for i in 0..100 {
+            borrows.push(x.clone());
+            assert_eq!(Arc::count(&x), i + 2);
+            assert_eq!(ArcBorrow::count(y), i + 2);
+        }
+    }
+}
