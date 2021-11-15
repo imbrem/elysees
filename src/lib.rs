@@ -37,6 +37,7 @@ extern crate unsize;
 
 mod arc;
 mod arc_borrow;
+mod arc_ref;
 #[cfg(feature = "arc-swap")]
 mod arc_swap_support;
 mod offset_arc;
@@ -44,6 +45,7 @@ mod unique_arc;
 
 pub use arc::*;
 pub use arc_borrow::*;
+pub use arc_ref::*;
 pub use offset_arc::*;
 pub use unique_arc::*;
 

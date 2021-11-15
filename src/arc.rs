@@ -193,17 +193,6 @@ impl<T> Arc<T> {
     pub fn try_unwrap(this: Self) -> Result<T, Self> {
         Self::try_unique(this).map(ArcBox::into_inner)
     }
-
-    /// Leak this [`Arc<T>`][`Arc`], getting an [`ArcBorrow<'static, T>`][`ArcBorrow`]
-    ///
-    /// You can call the [`get`][`ArcBorrow::get`] method on the returned [`ArcBorrow`] to get an `&'static T`.
-    /// Note that using this can (obviously) cause memory leaks!
-    #[inline]
-    pub fn leak(this: Arc<T>) -> ArcBorrow<'static, T> {
-        let result = ArcBorrow { p: this.p, phantom: PhantomData };
-        mem::forget(this);
-        result
-    }
 }
 
 impl<T: ?Sized> Arc<T> {
@@ -211,7 +200,7 @@ impl<T: ?Sized> Arc<T> {
     /// # Safety
     /// The `ptr` must point to a valid instance, allocated by an [`Arc`]. The reference could will
     /// not be modified.
-    unsafe fn from_raw_inner(ptr: *mut ArcInner<T>) -> Self {
+    pub(crate) unsafe fn from_raw_inner(ptr: *mut ArcInner<T>) -> Self {
         Arc {
             p: ptr::NonNull::new_unchecked(ptr),
             phantom: PhantomData,
@@ -230,7 +219,7 @@ impl<T: ?Sized> Arc<T> {
 
     // Non-inlined part of [`drop`][`Arc::drop`]. Just invokes the destructor.
     #[inline(never)]
-    unsafe fn drop_slow(&mut self) {
+    pub(crate) unsafe fn drop_slow(&mut self) {
         let _ = Box::from_raw(self.ptr());
     }
 
@@ -243,6 +232,17 @@ impl<T: ?Sized> Arc<T> {
 
     pub(crate) fn ptr(&self) -> *mut ArcInner<T> {
         self.p.as_ptr()
+    }
+
+    /// Leak this [`Arc<T>`][`Arc`], getting an [`ArcBorrow<'static, T>`][`ArcBorrow`]
+    ///
+    /// You can call the [`get`][`ArcBorrow::get`] method on the returned [`ArcBorrow`] to get an `&'static T`.
+    /// Note that using this can (obviously) cause memory leaks!
+    #[inline]
+    pub fn leak(this: Arc<T>) -> ArcBorrow<'static, T> {
+        let result = ArcBorrow { p: this.p, phantom: PhantomData };
+        mem::forget(this);
+        result
     }
 }
 
@@ -425,7 +425,7 @@ impl<T: ?Sized> Arc<T> {
     /// Gets the number of [`Arc`] pointers to this allocation
     #[inline]
     pub fn count(this: &Self) -> usize {
-        Arc::load_count(this, atomic::Ordering::Acquire)
+        Self::load_count(this, atomic::Ordering::Acquire)
     }
 
     /// Gets the number of [`Arc`] pointers to this allocation, with a given load ordering
