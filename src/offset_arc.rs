@@ -6,10 +6,10 @@ use core::ptr;
 
 use super::{Arc, OffsetArcBorrow};
 
-/// An `Arc`, except it holds a pointer to the T instead of to the
-/// entire ArcInner.
+/// An [`Arc`], except it holds a pointer to the `T` instead of to the
+/// entire [`ArcInner`](crate::ArcInner).
 ///
-/// An `OffsetArc<T>` has the same layout and ABI as a non-null
+/// An [`OffsetArc<T>`][`OffsetArc`] has the same layout and ABI as a non-null
 /// `const T*` in C, and may be used in FFI function signatures.
 ///
 /// ```text
@@ -23,10 +23,10 @@ use super::{Arc, OffsetArcBorrow};
 ///
 /// This means that this is a direct pointer to
 /// its contained data (and can be read from by both C++ and Rust),
-/// but we can also convert it to a "regular" `Arc<T>` by removing the offset.
+/// but we can also convert it to a "regular" [`Arc<T>`][`Arc`] by removing the offset.
 ///
-/// This is very useful if you have an Arc-containing struct shared between Rust and C++,
-/// and wish for C++ to be able to read the data behind the `Arc` without incurring
+/// This is very useful if you have an [`Arc`]-containing struct shared between Rust and C++,
+/// and wish for C++ to be able to read the data behind the [`Arc`] without incurring
 /// an FFI call overhead.
 #[derive(Eq)]
 #[repr(transparent)]
@@ -80,7 +80,7 @@ impl<T: PartialEq> PartialEq for OffsetArc<T> {
 }
 
 impl<T> OffsetArc<T> {
-    /// Temporarily converts |self| into a bonafide Arc and exposes it to the
+    /// Temporarily converts `self` into a bonafide [`Arc`] and exposes it to the
     /// provided callback. The refcount is not modified.
     #[inline]
     pub fn with_arc<F, U>(&self, f: F) -> U
@@ -98,7 +98,7 @@ impl<T> OffsetArc<T> {
     /// If uniquely owned, provide a mutable reference
     /// Else create a copy, and mutate that
     ///
-    /// This is functionally the same thing as `Arc::make_mut`
+    /// This is functionally the same thing as [`Arc::make_mut`]
     #[inline]
     pub fn make_mut(&mut self) -> &mut T
     where
@@ -119,14 +119,14 @@ impl<T> OffsetArc<T> {
         }
     }
 
-    /// Clone it as an `Arc`
+    /// Clone it as an [`Arc`]
     #[inline]
     pub fn clone_arc(&self) -> Arc<T> {
         OffsetArc::with_arc(self, |a| a.clone())
     }
 
     /// Produce a pointer to the data that can be converted back
-    /// to an `Arc`
+    /// to an [`Arc`]
     #[inline]
     pub fn borrow_arc(&self) -> OffsetArcBorrow<'_, T> {
         OffsetArcBorrow {

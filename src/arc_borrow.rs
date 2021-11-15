@@ -7,21 +7,12 @@ use std::sync::atomic;
 
 use super::{Arc, ArcInner, OffsetArc};
 
-/// A "borrowed `Arc`". This is a pointer to
-/// a T that is known to have been allocated within an
-/// `Arc`.
+/// A "borrowed [`Arc`]". This is essentially a reference to an `ArcInner<T>`
 ///
-/// This is equivalent in guarantees to `&Arc<T>`, however it is
-/// a bit more flexible. To obtain an `&Arc<T>` you must have
-/// an `Arc<T>` instance somewhere pinned down until we're done with it.
-/// It's also a direct pointer to `T`, so using this involves less pointer-chasing
+/// This is equivalent in guarantees to [`&Arc<T>`][`Arc`], however it has the same representation as an [`Arc<T>`], minimizing pointer-chasing.
 ///
-/// However, C++ code may hand us refcounted things as pointers to T directly,
-/// so we have to conjure up a temporary `Arc` on the stack each time. The
-/// same happens for when the object is managed by a `OffsetArc`.
-///
-/// `ArcBorrow` lets us deal with borrows of known-refcounted objects
-/// without needing to worry about where the `Arc<T>` is.
+/// [`ArcBorrow`] lets us deal with borrows of known-refcounted objects
+/// without needing to worry about where the [`Arc<T>`][`Arc`] is.
 #[derive(Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct ArcBorrow<'a, T: ?Sized + 'a> {
@@ -38,7 +29,7 @@ impl<'a, T> Clone for ArcBorrow<'a, T> {
 }
 
 impl<'a, T> ArcBorrow<'a, T> {
-    /// Clone this as an `Arc<T>`. This bumps the refcount.
+    /// Clone this as an [`Arc<T>`]. This bumps the refcount.
     #[inline]
     pub fn clone_arc(&self) -> Arc<T> {
         let arc = Arc {
@@ -50,15 +41,15 @@ impl<'a, T> ArcBorrow<'a, T> {
         arc
     }
 
-    /// Compare two `ArcBorrow`s via pointer equality. Will only return
+    /// Compare two [`ArcBorrow`]s via pointer equality. Will only return
     /// true if they come from the same allocation
     #[inline]
     pub fn ptr_eq(this: Self, other: Self) -> bool {
         this.p == other.p
     }
 
-    /// Similar to deref, but uses the lifetime |a| rather than the lifetime of
-    /// self, which is incompatible with the signature of the Deref trait.
+    /// Similar to deref, but uses the lifetime `'a` rather than the lifetime of
+    /// `self`, which is incompatible with the signature of the [`Deref`] trait.
     #[inline]
     pub fn get(&self) -> &'a T {
         &self.inner().data
@@ -70,7 +61,7 @@ impl<'a, T> ArcBorrow<'a, T> {
         unsafe { &*(self as *const _ as *const Arc<T>) }
     }
 
-    /// Get the internal pointer of an `ArcBorrow`
+    /// Get the internal pointer of an [`ArcBorrow`]
     #[inline]
     pub fn into_raw(this: Self) -> *const T {
         this.as_arc().as_ptr()
@@ -108,21 +99,21 @@ impl<'a, T> Deref for ArcBorrow<'a, T> {
     }
 }
 
-/// A "borrowed `OffsetArc`". This is a pointer to
+/// A "borrowed [`OffsetArc`]". This is a pointer to
 /// a T that is known to have been allocated within an
-/// `Arc`.
+/// [`Arc`].
 ///
-/// This is equivalent in guarantees to `&Arc<T>`, however it is
-/// a bit more flexible. To obtain an `&Arc<T>` you must have
-/// an `Arc<T>` instance somewhere pinned down until we're done with it.
+/// This is equivalent in guarantees to [`&Arc<T>`][`Arc`], however it is
+/// a bit more flexible. To obtain an [`&Arc<T>`][`Arc`] you must have
+/// an [`Arc<T>`][`Arc`] instance somewhere pinned down until we're done with it.
 /// It's also a direct pointer to `T`, so using this involves less pointer-chasing
 ///
-/// However, C++ code may hand us refcounted things as pointers to T directly,
-/// so we have to conjure up a temporary `Arc` on the stack each time. The
-/// same happens for when the object is managed by a `OffsetArc`.
+/// However, C++ code may hand us refcounted things as pointers to `T` directly,
+/// so we have to conjure up a temporary [`Arc`] on the stack each time. The
+/// same happens for when the object is managed by a [`OffsetArc`].
 ///
-/// `ArcBorrow` lets us deal with borrows of known-refcounted objects
-/// without needing to worry about where the `Arc<T>` is.
+/// [`OffsetArcBorrow`] lets us deal with borrows of known-refcounted objects
+/// without needing to worry about where the [`Arc<T>`] is.
 #[derive(Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct OffsetArcBorrow<'a, T: ?Sized + 'a> {
@@ -139,7 +130,7 @@ impl<'a, T> Clone for OffsetArcBorrow<'a, T> {
 }
 
 impl<'a, T> OffsetArcBorrow<'a, T> {
-    /// Clone this as an `Arc<T>`. This bumps the refcount.
+    /// Clone this as an [`Arc<T>`]. This bumps the refcount.
     #[inline]
     pub fn clone_arc(&self) -> Arc<T> {
         let arc = unsafe { Arc::from_raw(self.p.as_ptr()) };
@@ -148,14 +139,14 @@ impl<'a, T> OffsetArcBorrow<'a, T> {
         arc
     }
 
-    /// Compare two `ArcBorrow`s via pointer equality. Will only return
+    /// Compare two [`ArcBorrow`]s via pointer equality. Will only return
     /// true if they come from the same allocation
     #[inline]
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
         this.p == other.p
     }
 
-    /// Temporarily converts |self| into a bonafide Arc and exposes it to the
+    /// Temporarily converts `self` into a bonafide [`Arc`] and exposes it to the
     /// provided callback. The refcount is not modified.
     #[inline]
     pub fn with_arc<F, U>(&self, f: F) -> U
@@ -177,8 +168,8 @@ impl<'a, T> OffsetArcBorrow<'a, T> {
         unsafe { &*(self as *const _ as *const OffsetArc<T>) }
     }
 
-    /// Similar to deref, but uses the lifetime |a| rather than the lifetime of
-    /// self, which is incompatible with the signature of the Deref trait.
+    /// Similar to deref, but uses the lifetime `'a` rather than the lifetime of
+    /// `self`, which is incompatible with the signature of the [`Deref`] trait.
     #[inline]
     pub fn get(&self) -> &'a T {
         unsafe { &*self.p.as_ptr() }

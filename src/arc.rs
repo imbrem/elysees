@@ -34,7 +34,7 @@ const MAX_REFCOUNT: usize = (isize::MAX) as usize;
 
 /// The object allocated by an Arc<T>
 #[repr(C)]
-pub(crate) struct ArcInner<T: ?Sized> {
+pub struct ArcInner<T: ?Sized> {
     pub(crate) count: atomic::AtomicUsize,
     pub(crate) data: T,
 }
@@ -50,10 +50,10 @@ unsafe impl<T: ?Sized + Sync + Send> Sync for ArcInner<T> {}
 
 /// An atomically reference counted shared pointer
 ///
-/// See the documentation for [`Arc`] in the standard library. Unlike the
-/// standard library `Arc`, this `Arc` does not support weak reference counting.
+/// See the documentation for [`Arc`][aa] in the standard library. Unlike the
+/// standard library [`Arc`][aa], this [`Arc`] does not support weak reference counting.
 ///
-/// [`Arc`]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+/// [aa]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 #[repr(transparent)]
 pub struct Arc<T: ?Sized> {
     pub(crate) p: ptr::NonNull<ArcInner<T>>,
@@ -82,9 +82,9 @@ impl<T> Arc<T> {
 
     /// Convert the [`Arc`] to a raw pointer, suitable for use across FFI
     ///
-    /// Note: This returns a pointer to the data T, which is offset in the allocation.
+    /// Note: This returns a pointer to the data `T`, which is offset in the allocation.
     ///
-    /// It is recommended to use OffsetArc for this.
+    /// It is recommended to use [`OffsetArc`] for this.
     #[inline]
     pub fn into_raw(this: Self) -> *const T {
         let ptr = this.as_ptr();
@@ -100,12 +100,12 @@ impl<T> Arc<T> {
         unsafe { &((*self.ptr()).data) as *const _ }
     }
 
-    /// Reconstruct the Arc<T> from a raw pointer obtained from into_raw()
+    /// Reconstruct the [`Arc<T>`][`Arc`] from a raw pointer obtained from [`into_raw`][`Arc::into_raw`]
     ///
     /// Note: This raw pointer will be offset in the allocation and must be preceded
     /// by the atomic count.
     ///
-    /// It is recommended to use OffsetArc for this
+    /// It is recommended to use [`OffsetArc`] for this
     #[inline]
     pub unsafe fn from_raw(ptr: *const T) -> Self {
         // To find the corresponding pointer to the `ArcInner` we need
@@ -115,9 +115,9 @@ impl<T> Arc<T> {
     }
 
     /// Produce a pointer to the data that can be converted back
-    /// to an Arc. This is basically an `&Arc<T>`, without the extra indirection.
+    /// to an Arc. This is basically an [`&Arc<T>`][`Arc`], without the extra indirection.
     /// It has the benefits of an `&T` but also knows about the underlying refcount
-    /// and can be converted into more `Arc<T>`s if necessary.
+    /// and can be converted into more [`Arc<T>`][`Arc`]s if necessary.
     #[inline]
     pub fn borrow_arc(&self) -> ArcBorrow<'_, T> {
         ArcBorrow {
@@ -126,7 +126,7 @@ impl<T> Arc<T> {
         }
     }
 
-    /// Temporarily converts |self| into a bonafide OffsetArc and exposes it to the
+    /// Temporarily converts `self` into a bonafide [`OffsetArc`] and exposes it to the
     /// provided callback. The refcount is not modified.
     #[inline(always)]
     pub fn with_raw_offset_arc<F, U>(&self, f: F) -> U
@@ -146,13 +146,13 @@ impl<T> Arc<T> {
         result
     }
 
-    /// Returns the address on the heap of the Arc itself -- not the T within it -- for memory
+    /// Returns the address on the heap of the [`Arc`] itself -- not the `T` within it -- for memory
     /// reporting.
     pub fn heap_ptr(&self) -> *const c_void {
         self.p.as_ptr() as *const ArcInner<T> as *const c_void
     }
 
-    /// Converts an `Arc` into a `OffsetArc`. This consumes the `Arc`, so the refcount
+    /// Converts an [`Arc`] into a [`OffsetArc`]. This consumes the [`Arc`], so the refcount
     /// is not modified.
     #[inline]
     pub fn into_raw_offset(a: Self) -> OffsetArc<T> {
@@ -164,7 +164,7 @@ impl<T> Arc<T> {
         }
     }
 
-    /// Converts a `OffsetArc` into an `Arc`. This consumes the `OffsetArc`, so the refcount
+    /// Converts a [`OffsetArc`] into an [`Arc`]. This consumes the [`OffsetArc`], so the refcount
     /// is not modified.
     #[inline]
     pub fn from_raw_offset(a: OffsetArc<T>) -> Self {
@@ -194,9 +194,9 @@ impl<T> Arc<T> {
         Self::try_unique(this).map(ArcBox::into_inner)
     }
 
-    /// Leak this `Arc<T>`, getting an `ArcBorrow<'static, T>`
+    /// Leak this [`Arc<T>`][`Arc`], getting an [`ArcBorrow<'static, T>`][`ArcBorrow`]
     ///
-    /// You can call the `get` method on the returned `ArcBorrow` to get an `&'static T`.
+    /// You can call the [`get`][`ArcBorrow::get`] method on the returned [`ArcBorrow`] to get an `&'static T`.
     /// Note that using this can (obviously) cause memory leaks!
     #[inline]
     pub fn leak(this: Arc<T>) -> ArcBorrow<'static, T> {
@@ -207,9 +207,9 @@ impl<T> Arc<T> {
 }
 
 impl<T: ?Sized> Arc<T> {
-    /// Construct an `Arc` from an allocated `ArcInner`.
+    /// Construct an [`Arc`] from an allocated [`ArcInner`].
     /// # Safety
-    /// The `ptr` must point to a valid instance, allocated by an `Arc`. The reference could will
+    /// The `ptr` must point to a valid instance, allocated by an [`Arc`]. The reference could will
     /// not be modified.
     unsafe fn from_raw_inner(ptr: *mut ArcInner<T>) -> Self {
         Arc {
@@ -228,13 +228,13 @@ impl<T: ?Sized> Arc<T> {
         unsafe { &*self.ptr() }
     }
 
-    // Non-inlined part of `drop`. Just invokes the destructor.
+    // Non-inlined part of [`drop`][`Arc::drop`]. Just invokes the destructor.
     #[inline(never)]
     unsafe fn drop_slow(&mut self) {
         let _ = Box::from_raw(self.ptr());
     }
 
-    /// Test pointer equality between the two Arcs, i.e. they must be the _same_
+    /// Test pointer equality between the two [`Arc`]s, i.e. they must be the _same_
     /// allocation
     #[inline]
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
@@ -247,7 +247,7 @@ impl<T: ?Sized> Arc<T> {
 }
 
 impl<T> Arc<MaybeUninit<T>> {
-    /// Create an Arc contains an `MaybeUninit<T>`.
+    /// Create an [`Arc`] containing a [`MaybeUninit<T>`][`core::mem::MaybeUninit`].
     pub fn new_uninit() -> Self {
         Arc::new(MaybeUninit::<T>::uninit())
     }
@@ -277,7 +277,7 @@ impl<T> Arc<MaybeUninit<T>> {
 
 #[cfg(feature = "std")]
 impl<T> Arc<[MaybeUninit<T>]> {
-    /// Create an Arc contains an array `[MaybeUninit<T>]` of `len`.
+    /// Create an [`Arc`] contains an array `[MaybeUninit<T>]` of `len`.
     pub fn new_uninit_slice(len: usize) -> Self {
         // layout should work as expected since ArcInner uses C representation.
         let layout = Layout::new::<atomic::AtomicUsize>();
@@ -368,17 +368,17 @@ impl<T: ?Sized> Deref for Arc<T> {
 }
 
 impl<T: Clone + ?Sized> Arc<T> {
-    /// Makes a mutable reference to the `Arc`, cloning if necessary
+    /// Makes a mutable reference to the [`Arc`], cloning if necessary
     ///
     /// This is functionally equivalent to [`Arc::make_mut`][mm] from the standard library.
     ///
-    /// If this `Arc` is uniquely owned, `make_mut()` will provide a mutable
-    /// reference to the contents. If not, `make_mut()` will create a _new_ `Arc`
+    /// If this [`Arc`] is uniquely owned, `make_mut()` will provide a mutable
+    /// reference to the contents. If not, `make_mut()` will create a _new_ [`Arc`]
     /// with a copy of the contents, update `this` to point to it, and provide
     /// a mutable reference to its contents.
     ///
     /// This is useful for implementing copy-on-write schemes where you wish to
-    /// avoid copying things if your `Arc` is not shared.
+    /// avoid copying things if your [`Arc`] is not shared.
     ///
     /// [mm]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html#method.make_mut
     #[inline]
@@ -400,7 +400,7 @@ impl<T: Clone + ?Sized> Arc<T> {
 }
 
 impl<T: ?Sized> Arc<T> {
-    /// Provides mutable access to the contents _if_ the `Arc` is uniquely owned.
+    /// Provides mutable access to the contents _if_ the [`Arc`] is uniquely owned.
     #[inline]
     pub fn get_mut(this: &mut Self) -> Option<&mut T> {
         if this.is_unique() {
@@ -413,7 +413,7 @@ impl<T: ?Sized> Arc<T> {
         }
     }
 
-    /// Whether or not the `Arc` is uniquely owned (is the refcount 1?).
+    /// Whether or not the [`Arc`] is uniquely owned (is the refcount 1?).
     #[inline]
     pub fn is_unique(&self) -> bool {
         // See the extensive discussion in [1] for why this needs to be Acquire.
@@ -434,7 +434,7 @@ impl<T: ?Sized> Arc<T> {
         this.inner().count.load(order)
     }
 
-    /// Returns a [`ArcBox`] if the [`Arc`] has exactly one strong reference.
+    /// Returns an [`ArcBox`] if the [`Arc`] has exactly one strong reference.
     ///
     /// Otherwise, an [`Err`] is returned with the same [`Arc`] that was
     /// passed in.
@@ -465,7 +465,7 @@ impl<T: ?Sized> Arc<T> {
         }
     }
 
-    /// Convert this `Arc` to an `ArcBox`, cloning the internal data if necessary for uniqueness
+    /// Convert this [`Arc`] to an [`ArcBox`], cloning the internal data if necessary for uniqueness
     #[inline]
     pub fn unique(this: Self) -> ArcBox<T> where T: Clone {
         if this.is_unique() {

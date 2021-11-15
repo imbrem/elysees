@@ -10,20 +10,20 @@ use core::borrow::{Borrow, BorrowMut};
 
 use super::{Arc, ArcInner};
 
-/// An `Arc` that is known to be uniquely owned
+/// An [`Arc`] that is known to be uniquely owned
 ///
-/// When `Arc`s are constructed, they are known to be
+/// When [`Arc`]s are constructed, they are known to be
 /// uniquely owned. In such a case it is safe to mutate
-/// the contents of the `Arc`. Normally, one would just handle
+/// the contents of the [`Arc`]. Normally, one would just handle
 /// this by mutating the data on the stack before allocating the
-/// `Arc`, however it's possible the data is large or unsized
+/// [`Arc`], however it's possible the data is large or unsized
 /// and you need to heap-allocate it earlier in such a way
-/// that it can be freely converted into a regular `Arc` once you're
+/// that it can be freely converted into a regular [`Arc`] once you're
 /// done.
 ///
-/// `ArcBox` exists for this purpose, when constructed it performs
-/// the same allocations necessary for an `Arc`, however it allows mutable access.
-/// Once the mutation is finished, you can call `.shareable()` and get a regular `Arc`
+/// [`ArcBox`] exists for this purpose, when constructed it performs
+/// the same allocations necessary for an [`Arc`], however it allows mutable access.
+/// Once the mutation is finished, you can call [`.shareable()`](`ArcBox::shareable`) and get a regular [`Arc`]
 /// out of it.
 ///
 /// ```rust
@@ -38,12 +38,12 @@ pub struct ArcBox<T: ?Sized>(pub(crate) Arc<T>);
 
 impl<T> ArcBox<T> {
     #[inline]
-    /// Construct a new ArcBox
+    /// Construct a new [`ArcBox`]
     pub fn new(data: T) -> Self {
         ArcBox(Arc::new(data))
     }
 
-    /// Construct an uninitialized arc
+    /// Construct an uninitialized [`ArcBox`]
     #[inline]
     pub fn new_uninit() -> ArcBox<MaybeUninit<T>> {
         unsafe {
@@ -61,7 +61,7 @@ impl<T> ArcBox<T> {
         }
     }
 
-    /// Gets the inner value of the unique arc
+    /// Gets the inner value of this [`ArcBox`]
     pub fn into_inner(this: Self) -> T {
         // Wrap the Arc in a `ManuallyDrop` so that its drop routine never runs
         let this = ManuallyDrop::new(this.0);
@@ -86,11 +86,11 @@ impl<T: ?Sized> ArcBox<T> {
 
     /// Creates a new [`ArcBox`] from the given [`Arc`].
     ///
-    /// An unchecked alternative to `Arc::try_unique()`
+    /// An unchecked alternative to [`Arc::try_unique`]
     ///
     /// # Safety
     ///
-    /// The given `Arc` must have a reference count of exactly one
+    /// The given [`Arc`] must have a reference count of exactly one
     ///
     pub(crate) unsafe fn from_arc(arc: Arc<T>) -> Self {
         debug_assert_eq!(Arc::count(&arc), 1);
@@ -99,11 +99,11 @@ impl<T: ?Sized> ArcBox<T> {
 }
 
 impl<T> ArcBox<MaybeUninit<T>> {
-    /// Convert to an initialized Arc.
+    /// Convert to an initialized [`Arc`].
     ///
     /// # Safety
     ///
-    /// This function is equivalent to `MaybeUninit::assume_init` and has the
+    /// This function is equivalent to [`MaybeUninit::assume_init`] and has the
     /// same safety requirements. You are responsible for ensuring that the `T`
     /// has actually been initialized before calling this method.
     #[inline]
