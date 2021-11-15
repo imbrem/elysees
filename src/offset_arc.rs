@@ -4,7 +4,7 @@ use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::ptr;
 
-use super::{Arc, ArcBorrow};
+use super::{Arc, OffsetArcBorrow};
 
 /// An `Arc`, except it holds a pointer to the T instead of to the
 /// entire ArcInner.
@@ -31,7 +31,7 @@ use super::{Arc, ArcBorrow};
 #[derive(Eq)]
 #[repr(transparent)]
 pub struct OffsetArc<T> {
-    pub(crate) ptr: ptr::NonNull<T>,
+    pub(crate) p: ptr::NonNull<T>,
     pub(crate) phantom: PhantomData<T>,
 }
 
@@ -42,7 +42,7 @@ impl<T> Deref for OffsetArc<T> {
     type Target = T;
     #[inline]
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.ptr.as_ptr() }
+        unsafe { &*self.p.as_ptr() }
     }
 }
 
@@ -56,7 +56,7 @@ impl<T> Clone for OffsetArc<T> {
 impl<T> Drop for OffsetArc<T> {
     fn drop(&mut self) {
         let _ = Arc::from_raw_offset(OffsetArc {
-            ptr: self.ptr,
+            p: self.p,
             phantom: PhantomData,
         });
     }
@@ -88,7 +88,7 @@ impl<T> OffsetArc<T> {
         F: FnOnce(&Arc<T>) -> U,
     {
         // Synthesize transient Arc, which never touches the refcount of the ArcInner.
-        let transient = unsafe { ManuallyDrop::new(Arc::from_raw(self.ptr.as_ptr())) };
+        let transient = unsafe { ManuallyDrop::new(Arc::from_raw(self.p.as_ptr())) };
 
         // Expose the transient Arc to the callback, which may clone it if it wants
         // and forward the result to the user
@@ -128,7 +128,10 @@ impl<T> OffsetArc<T> {
     /// Produce a pointer to the data that can be converted back
     /// to an `Arc`
     #[inline]
-    pub fn borrow_arc(&self) -> ArcBorrow<'_, T> {
-        ArcBorrow(&**self)
+    pub fn borrow_arc(&self) -> OffsetArcBorrow<'_, T> {
+        OffsetArcBorrow {
+            p: self.p,
+            phantom: PhantomData,
+        }
     }
 }

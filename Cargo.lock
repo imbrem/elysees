@@ -15,6 +15,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
+name = "elysees"
+version = "0.3.0"
+dependencies = [
+ "arc-swap",
+ "lazy_static",
+ "memoffset",
+ "serde",
+ "stable_deref_trait",
+ "unsize",
+]
+
+[[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+
+[[package]]
 name = "memoffset"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -34,17 +52,6 @@ name = "stable_deref_trait"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
-
-[[package]]
-name = "triomphe"
-version = "0.1.3"
-dependencies = [
- "arc-swap",
- "memoffset",
- "serde",
- "stable_deref_trait",
- "unsize",
-]
 
 [[package]]
 name = "unsize"

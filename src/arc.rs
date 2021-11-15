@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "stable_deref_trait")]
 use stable_deref_trait::{CloneStableDeref, StableDeref};
 
-use crate::{abort, ArcBorrow, OffsetArc, UniqueArc};
+use crate::{abort, ArcBorrow, OffsetArc, ArcBox};
 
 /// A soft limit on the amount of references that may be made to an `Arc`.
 ///
@@ -64,7 +64,7 @@ unsafe impl<T: ?Sized + Sync + Send> Send for Arc<T> {}
 unsafe impl<T: ?Sized + Sync + Send> Sync for Arc<T> {}
 
 impl<T> Arc<T> {
-    /// Construct an `Arc<T>`
+    /// Construct an [`Arc`]
     #[inline]
     pub fn new(data: T) -> Self {
         let ptr = Box::into_raw(Box::new(ArcInner {
@@ -80,7 +80,7 @@ impl<T> Arc<T> {
         }
     }
 
-    /// Convert the Arc<T> to a raw pointer, suitable for use across FFI
+    /// Convert the [`Arc`] to a raw pointer, suitable for use across FFI
     ///
     /// Note: This returns a pointer to the data T, which is offset in the allocation.
     ///
@@ -120,7 +120,10 @@ impl<T> Arc<T> {
     /// and can be converted into more `Arc<T>`s if necessary.
     #[inline]
     pub fn borrow_arc(&self) -> ArcBorrow<'_, T> {
-        ArcBorrow(&**self)
+        ArcBorrow {
+            p: self.p,
+            phantom: PhantomData
+        }
     }
 
     /// Temporarily converts |self| into a bonafide OffsetArc and exposes it to the
@@ -155,7 +158,7 @@ impl<T> Arc<T> {
     pub fn into_raw_offset(a: Self) -> OffsetArc<T> {
         unsafe {
             OffsetArc {
-                ptr: ptr::NonNull::new_unchecked(Arc::into_raw(a) as *mut T),
+                p: ptr::NonNull::new_unchecked(Arc::into_raw(a) as *mut T),
                 phantom: PhantomData,
             }
         }
@@ -165,7 +168,7 @@ impl<T> Arc<T> {
     /// is not modified.
     #[inline]
     pub fn from_raw_offset(a: OffsetArc<T>) -> Self {
-        let ptr = a.ptr.as_ptr();
+        let ptr = a.p.as_ptr();
         mem::forget(a);
         unsafe { Arc::from_raw(ptr) }
     }
@@ -178,7 +181,7 @@ impl<T> Arc<T> {
     /// # Examples
     ///
     /// ```
-    /// use triomphe::Arc;
+    /// use elysees::Arc;
     ///
     /// let x = Arc::new(3);
     /// assert_eq!(Arc::try_unwrap(x), Ok(3));
@@ -188,7 +191,18 @@ impl<T> Arc<T> {
     /// assert_eq!(*Arc::try_unwrap(x).unwrap_err(), 4);
     /// ```
     pub fn try_unwrap(this: Self) -> Result<T, Self> {
-        Self::try_unique(this).map(UniqueArc::into_inner)
+        Self::try_unique(this).map(ArcBox::into_inner)
+    }
+
+    /// Leak this `Arc<T>`, getting an `ArcBorrow<'static, T>`
+    ///
+    /// You can call the `get` method on the returned `ArcBorrow` to get an `&'static T`.
+    /// Note that using this can (obviously) cause memory leaks!
+    #[inline]
+    pub fn leak(this: Arc<T>) -> ArcBorrow<'static, T> {
+        let result = ArcBorrow { p: this.p, phantom: PhantomData };
+        mem::forget(this);
+        result
     }
 }
 
@@ -292,6 +306,7 @@ impl<T> Arc<[MaybeUninit<T>]> {
     }
 
     /// Obtain a mutable slice to the stored `[MaybeUninit<T>]`.
+    #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [MaybeUninit<T>] {
         unsafe { &mut (*self.ptr()).data }
     }
@@ -399,6 +414,7 @@ impl<T: ?Sized> Arc<T> {
     }
 
     /// Whether or not the `Arc` is uniquely owned (is the refcount 1?).
+    #[inline]
     pub fn is_unique(&self) -> bool {
         // See the extensive discussion in [1] for why this needs to be Acquire.
         //
@@ -407,11 +423,18 @@ impl<T: ?Sized> Arc<T> {
     }
 
     /// Gets the number of [`Arc`] pointers to this allocation
+    #[inline]
     pub fn count(this: &Self) -> usize {
-        this.inner().count.load(Acquire)
+        Arc::load_count(this, atomic::Ordering::Acquire)
     }
 
-    /// Returns a [`UniqueArc`] if the [`Arc`] has exactly one strong reference.
+    /// Gets the number of [`Arc`] pointers to this allocation, with a given load ordering
+    #[inline]
+    pub fn load_count(this: &Self, order: atomic::Ordering) -> usize {
+        this.inner().count.load(order)
+    }
+
+    /// Returns a [`ArcBox`] if the [`Arc`] has exactly one strong reference.
     ///
     /// Otherwise, an [`Err`] is returned with the same [`Arc`] that was
     /// passed in.
@@ -419,25 +442,36 @@ impl<T: ?Sized> Arc<T> {
     /// # Examples
     ///
     /// ```
-    /// use triomphe::{Arc, UniqueArc};
+    /// use elysees::{Arc, ArcBox};
     ///
     /// let x = Arc::new(3);
-    /// assert_eq!(UniqueArc::into_inner(Arc::try_unique(x).unwrap()), 3);
+    /// assert_eq!(ArcBox::into_inner(Arc::try_unique(x).unwrap()), 3);
     ///
     /// let x = Arc::new(4);
     /// let _y = Arc::clone(&x);
     /// assert_eq!(
-    ///     *Arc::try_unique(x).map(UniqueArc::into_inner).unwrap_err(),
+    ///     *Arc::try_unique(x).map(ArcBox::into_inner).unwrap_err(),
     ///     4,
     /// );
     /// ```
-    pub fn try_unique(this: Self) -> Result<UniqueArc<T>, Self> {
+    #[inline]
+    pub fn try_unique(this: Self) -> Result<ArcBox<T>, Self> {
         if this.is_unique() {
-            // Safety: The current arc is unique and making a `UniqueArc`
+            // Safety: The current arc is unique and making a `ArcBox`
             //         from it is sound
-            unsafe { Ok(UniqueArc::from_arc(this)) }
+            unsafe { Ok(ArcBox::from_arc(this)) }
         } else {
             Err(this)
+        }
+    }
+
+    /// Convert this `Arc` to an `ArcBox`, cloning the internal data if necessary for uniqueness
+    #[inline]
+    pub fn unique(this: Self) -> ArcBox<T> where T: Clone {
+        if this.is_unique() {
+            ArcBox(this)
+        } else {
+            ArcBox::new(this.deref().clone())
         }
     }
 }

@@ -1,10 +1,12 @@
 use alloc::{alloc::Layout, boxed::Box};
 use core::convert::TryFrom;
+use core::fmt::{self, Debug, Display, Formatter};
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::AtomicUsize;
+use core::borrow::{Borrow, BorrowMut};
 
 use super::{Arc, ArcInner};
 
@@ -19,31 +21,31 @@ use super::{Arc, ArcInner};
 /// that it can be freely converted into a regular `Arc` once you're
 /// done.
 ///
-/// `UniqueArc` exists for this purpose, when constructed it performs
+/// `ArcBox` exists for this purpose, when constructed it performs
 /// the same allocations necessary for an `Arc`, however it allows mutable access.
 /// Once the mutation is finished, you can call `.shareable()` and get a regular `Arc`
 /// out of it.
 ///
 /// ```rust
-/// # use triomphe::UniqueArc;
+/// # use elysees::ArcBox;
 /// let data = [1, 2, 3, 4, 5];
-/// let mut x = UniqueArc::new(data);
+/// let mut x = ArcBox::new(data);
 /// x[4] = 7; // mutate!
 /// let y = x.shareable(); // y is an Arc<T>
 /// ```
 #[repr(transparent)]
-pub struct UniqueArc<T: ?Sized>(Arc<T>);
+pub struct ArcBox<T: ?Sized>(pub(crate) Arc<T>);
 
-impl<T> UniqueArc<T> {
+impl<T> ArcBox<T> {
     #[inline]
-    /// Construct a new UniqueArc
+    /// Construct a new ArcBox
     pub fn new(data: T) -> Self {
-        UniqueArc(Arc::new(data))
+        ArcBox(Arc::new(data))
     }
 
     /// Construct an uninitialized arc
     #[inline]
-    pub fn new_uninit() -> UniqueArc<MaybeUninit<T>> {
+    pub fn new_uninit() -> ArcBox<MaybeUninit<T>> {
         unsafe {
             let layout = Layout::new::<ArcInner<MaybeUninit<T>>>();
             let ptr = alloc::alloc::alloc(layout);
@@ -52,7 +54,7 @@ impl<T> UniqueArc<T> {
                 .cast::<ArcInner<MaybeUninit<T>>>();
             ptr::write(&mut p.as_mut().count, AtomicUsize::new(1));
 
-            UniqueArc(Arc {
+            ArcBox(Arc {
                 p,
                 phantom: PhantomData,
             })
@@ -65,7 +67,7 @@ impl<T> UniqueArc<T> {
         let this = ManuallyDrop::new(this.0);
         debug_assert!(
             this.is_unique(),
-            "attempted to call `.into_inner()` on a `UniqueArc` with a non-zero ref count",
+            "attempted to call `.into_inner()` on a `ArcBox` with a non-zero ref count",
         );
 
         // Safety: We have exclusive access to the inner data and the
@@ -75,14 +77,14 @@ impl<T> UniqueArc<T> {
     }
 }
 
-impl<T: ?Sized> UniqueArc<T> {
+impl<T: ?Sized> ArcBox<T> {
     /// Convert to a shareable Arc<T> once we're done mutating it
     #[inline]
     pub fn shareable(self) -> Arc<T> {
         self.0
     }
 
-    /// Creates a new [`UniqueArc`] from the given [`Arc`].
+    /// Creates a new [`ArcBox`] from the given [`Arc`].
     ///
     /// An unchecked alternative to `Arc::try_unique()`
     ///
@@ -96,7 +98,7 @@ impl<T: ?Sized> UniqueArc<T> {
     }
 }
 
-impl<T> UniqueArc<MaybeUninit<T>> {
+impl<T> ArcBox<MaybeUninit<T>> {
     /// Convert to an initialized Arc.
     ///
     /// # Safety
@@ -105,15 +107,15 @@ impl<T> UniqueArc<MaybeUninit<T>> {
     /// same safety requirements. You are responsible for ensuring that the `T`
     /// has actually been initialized before calling this method.
     #[inline]
-    pub unsafe fn assume_init(this: Self) -> UniqueArc<T> {
-        UniqueArc(Arc {
+    pub unsafe fn assume_init(this: Self) -> ArcBox<T> {
+        ArcBox(Arc {
             p: ManuallyDrop::new(this).0.p.cast(),
             phantom: PhantomData,
         })
     }
 }
 
-impl<T: ?Sized> TryFrom<Arc<T>> for UniqueArc<T> {
+impl<T: ?Sized> TryFrom<Arc<T>> for ArcBox<T> {
     type Error = Arc<T>;
 
     fn try_from(arc: Arc<T>) -> Result<Self, Self::Error> {
@@ -121,7 +123,7 @@ impl<T: ?Sized> TryFrom<Arc<T>> for UniqueArc<T> {
     }
 }
 
-impl<T: ?Sized> Deref for UniqueArc<T> {
+impl<T: ?Sized> Deref for ArcBox<T> {
     type Target = T;
 
     #[inline]
@@ -130,7 +132,7 @@ impl<T: ?Sized> Deref for UniqueArc<T> {
     }
 }
 
-impl<T: ?Sized> DerefMut for UniqueArc<T> {
+impl<T: ?Sized> DerefMut for ArcBox<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut T {
         // We know this to be uniquely owned
@@ -138,37 +140,93 @@ impl<T: ?Sized> DerefMut for UniqueArc<T> {
     }
 }
 
+impl<T: Clone> Clone for ArcBox<T> {
+    #[inline]
+    fn clone(&self) -> ArcBox<T> {
+        ArcBox(Arc::new(self.0.deref().clone()))
+    }
+}
+
+impl<T: Default> Default for ArcBox<T> {
+    #[inline]
+    fn default() -> ArcBox<T> {
+        ArcBox::new(Default::default())
+    }
+}
+
+impl<T: Debug> Debug for ArcBox<T> {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&self.0, f)
+    }
+}
+
+impl<T: Display> Display for ArcBox<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+
+impl<T: ?Sized> Borrow<T> for ArcBox<T> {
+    #[inline]
+    fn borrow(&self) -> &T {
+        &**self
+    }
+}
+
+impl<T: ?Sized> AsRef<T> for ArcBox<T> {
+    #[inline]
+    fn as_ref(&self) -> &T {
+        &**self
+    }
+}
+
+impl<T: ?Sized> BorrowMut<T> for ArcBox<T> {
+    #[inline]
+    fn borrow_mut(&mut self) -> &mut T {
+        &mut **self
+    }
+}
+
+impl<T: ?Sized> AsMut<T> for ArcBox<T> {
+    #[inline]
+    fn as_mut(&mut self) -> &mut T {
+        &mut **self
+    }
+}
+
 // Safety:
 // This leverages the correctness of Arc's CoerciblePtr impl. Additionally, we must ensure that
-// this can not be used to violate the safety invariants of UniqueArc, which require that we can not
+// this can not be used to violate the safety invariants of ArcBox, which require that we can not
 // duplicate the Arc, such that replace_ptr returns a valid instance. This holds since it consumes
 // a unique owner of the contained ArcInner.
 #[cfg(feature = "unsize")]
-unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for UniqueArc<T> {
+unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for ArcBox<T> {
     type Pointee = T;
-    type Output = UniqueArc<U>;
+    type Output = ArcBox<U>;
 
     fn as_sized_ptr(&mut self) -> *mut T {
         // Dispatch to the contained field.
         unsize::CoerciblePtr::<U>::as_sized_ptr(&mut self.0)
     }
 
-    unsafe fn replace_ptr(self, new: *mut U) -> UniqueArc<U> {
+    unsafe fn replace_ptr(self, new: *mut U) -> ArcBox<U> {
         // Dispatch to the contained field, work around conflict of destructuring and Drop.
         let inner = ManuallyDrop::new(self);
-        UniqueArc(ptr::read(&inner.0).replace_ptr(new))
+        ArcBox(ptr::read(&inner.0).replace_ptr(new))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{Arc, UniqueArc};
+    use crate::{Arc, ArcBox};
     use core::convert::TryFrom;
 
     #[test]
     fn unique_into_inner() {
-        let unique = UniqueArc::new(10u64);
-        assert_eq!(UniqueArc::into_inner(unique), 10);
+        let unique = ArcBox::new(10u64);
+        assert_eq!(ArcBox::into_inner(unique), 10);
     }
 
     #[test]
@@ -176,10 +234,7 @@ mod tests {
         let x = Arc::new(10_000);
         let y = x.clone();
 
-        assert!(UniqueArc::try_from(x).is_err());
-        assert_eq!(
-            UniqueArc::into_inner(UniqueArc::try_from(y).unwrap()),
-            10_000,
-        );
+        assert!(ArcBox::try_from(x).is_err());
+        assert_eq!(ArcBox::into_inner(ArcBox::try_from(y).unwrap()), 10_000,);
     }
 }
