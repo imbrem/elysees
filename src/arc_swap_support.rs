@@ -1,27 +1,8 @@
 use arc_swap::RefCnt;
 
-use crate::{Arc, ThinArc};
+use crate::Arc;
 use core::ffi::c_void;
 use core::ptr::NonNull;
-
-unsafe impl<H, T> RefCnt for ThinArc<H, T> {
-    type Base = c_void;
-
-    #[inline]
-    fn into_ptr(me: Self) -> *mut Self::Base {
-        ThinArc::into_raw(me) as *mut _
-    }
-
-    #[inline]
-    fn as_ptr(me: &Self) -> *mut Self::Base {
-        ThinArc::as_ptr(me) as *mut _
-    }
-
-    #[inline]
-    unsafe fn from_ptr(ptr: *const Self::Base) -> Self {
-        ThinArc::from_raw(ptr)
-    }
-}
 
 unsafe impl<T> RefCnt for Arc<T> {
     type Base = T;
