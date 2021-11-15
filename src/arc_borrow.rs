@@ -136,8 +136,8 @@ impl<'a, T> Clone for OffsetArcBorrow<'a, T> {
 impl<'a, T> OffsetArcBorrow<'a, T> {
     /// Clone this as an [`Arc<T>`]. This bumps the refcount.
     #[inline]
-    pub fn clone_arc(&self) -> Arc<T> {
-        let arc = unsafe { Arc::from_raw(self.p.as_ptr()) };
+    pub fn clone_arc(this: Self) -> Arc<T> {
+        let arc = unsafe { Arc::from_raw(this.p.as_ptr()) };
         // addref it!
         mem::forget(arc.clone());
         arc

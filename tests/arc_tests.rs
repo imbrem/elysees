@@ -1,6 +1,6 @@
 use elysees::*;
 use lazy_static::lazy_static;
-use std::borrow::{BorrowMut};
+use std::borrow::BorrowMut;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering::Relaxed;
@@ -20,11 +20,13 @@ lazy_static! {
 #[test]
 fn basic_arc_usage() {
     #![allow(clippy::many_single_char_names)]
-    let x = Arc::new(7);
+    let mut x = Arc::new(7);
     assert!(Arc::is_unique(&x));
+    assert_eq!(Arc::get_mut(&mut x), Some(&mut 7));
     assert_eq!(*x, 7);
     let y = x.clone();
     assert!(!Arc::is_unique(&x));
+    assert_eq!(Arc::get_mut(&mut x), None);
     assert!(!Arc::is_unique(&y));
     assert_eq!(Arc::load_count(&x, Relaxed), 2);
     assert_eq!(Arc::load_count(&y, Relaxed), 2);
@@ -103,7 +105,10 @@ fn basic_arc_usage() {
     assert!(ArcBorrow::as_arc(&yl) < &make_unique);
     assert!(ArcBorrow::as_arc(&yl) <= &make_unique);
     assert_eq!(ArcBorrow::as_arc(&yl).cmp(&make_unique), Ordering::Less);
-    assert_eq!(ArcBorrow::as_arc(&yl).partial_cmp(&make_unique), Some(Ordering::Less));
+    assert_eq!(
+        ArcBorrow::as_arc(&yl).partial_cmp(&make_unique),
+        Some(Ordering::Less)
+    );
 
     let remake_unique = Arc::try_unique(make_unique).expect("Unique!");
     assert_eq!(*remake_unique, 213);
@@ -126,16 +131,16 @@ fn basic_arc_usage() {
         .insert(SyncPtr(ArcBorrow::into_raw(yl) as *const ()));
 }
 
-
-
 #[test]
 fn basic_arc_ref_usage() {
     #![allow(clippy::many_single_char_names)]
-    let x = ArcRef::new(7);
+    let mut x = ArcRef::new(7);
     assert!(ArcRef::is_unique(&x));
+    assert_eq!(ArcRef::get_mut(&mut x), Some(&mut 7));
     assert_eq!(*x, 7);
     let y = x.clone();
     assert!(!ArcRef::is_unique(&x));
+    assert_eq!(ArcRef::get_mut(&mut x), None);
     assert!(!ArcRef::is_unique(&y));
     assert_eq!(ArcRef::load_count(&x, Relaxed), 2);
     assert_eq!(ArcRef::load_count(&y, Relaxed), 2);
@@ -218,7 +223,10 @@ fn basic_arc_ref_usage() {
     assert!(ArcBorrow::as_arc_ref(&yl) < &make_unique);
     assert!(ArcBorrow::as_arc_ref(&yl) <= &make_unique);
     assert_eq!(ArcBorrow::as_arc_ref(&yl).cmp(&make_unique), Ordering::Less);
-    assert_eq!(ArcBorrow::as_arc_ref(&yl).partial_cmp(&make_unique), Some(Ordering::Less));
+    assert_eq!(
+        ArcBorrow::as_arc_ref(&yl).partial_cmp(&make_unique),
+        Some(Ordering::Less)
+    );
 
     let remake_unique = ArcRef::try_unique(make_unique).expect("Unique!");
     assert_eq!(*remake_unique, 213);
@@ -295,12 +303,15 @@ fn from_into_raw() {
 
 #[test]
 fn arc_formatting() {
-    let arc1 = Arc::new(56);
-    let arc2 = Arc::new(88);
-    assert_eq!(format!("{:?}", arc1), "56");
-    assert_eq!(format!("{:?}", arc2), "88");
-    assert_eq!(format!("{}", arc1), "56");
-    assert_eq!(format!("{}", arc2), "88");
+    for (arc, name) in &[(Arc::new(56), "56"), (Arc::new(88), "88")] {
+        assert_eq!(format!("{}", arc), *name);
+        assert_eq!(format!("{:?}", arc), *name);
+        assert_eq!(format!("{}", Arc::borrow_arc(arc)), *name);
+        assert_eq!(format!("{:?}", Arc::borrow_arc(arc)), *name);
+        assert_eq!(format!("{}", Arc::borrow_offset_arc(arc)), *name);
+        assert_eq!(format!("{:?}", Arc::borrow_offset_arc(arc)), *name);
+        let _ = format!("{:p}", arc);
+    }
 }
 
 #[test]
@@ -319,16 +330,66 @@ fn arc_hash() {
     assert!(map.insert(Arc::new(8)));
     assert!(map.insert(Arc::new(9)));
     assert!(!map.insert(Arc::new(7)));
+
+    let mut borrow_map = HashSet::new();
+    for arc in map.iter() {
+        assert!(borrow_map.insert(Arc::borrow_arc(arc)));
+    }
+    for arc in map.iter() {
+        assert!(!borrow_map.insert(Arc::borrow_arc(arc)));
+    }
+
+    let mut borrow_map = HashSet::new();
+    for arc in map.iter() {
+        assert!(borrow_map.insert(Arc::borrow_offset_arc(arc)));
+    }
+    for arc in map.iter() {
+        assert!(!borrow_map.insert(Arc::borrow_offset_arc(arc)));
+    }
+}
+
+#[test]
+fn arc_borrow_cmp() {
+    let ints = [645, 6432, 346, 4534];
+    for i in ints {
+        let x = Arc::new(i);
+        let xo = Arc::into_raw_offset(x.clone());
+        for j in ints {
+            let y = Arc::new(j);
+            let yo = Arc::into_raw_offset(y.clone());
+
+            let xb = Arc::borrow_arc(&x);
+            let yb = Arc::borrow_arc(&y);
+            assert_eq!(xb.cmp(&yb), i.cmp(&j));
+            assert_eq!(xb.partial_cmp(&yb), i.partial_cmp(&j));
+            assert_eq!(xb == yb, i == j);
+            assert_eq!(xb != yb, i != j);
+            assert_eq!(xb < yb, i < j);
+            assert_eq!(xb <= yb, i <= j);
+            assert_eq!(xb > yb, i > j);
+            assert_eq!(xb >= yb, i >= j);
+
+            let xb = OffsetArc::borrow_arc(&xo);
+            let yb = OffsetArc::borrow_arc(&yo);
+            assert_eq!(xb.cmp(&yb), i.cmp(&j));
+            assert_eq!(xb.partial_cmp(&yb), i.partial_cmp(&j));
+            assert_eq!(xb == yb, i == j);
+            assert_eq!(xb != yb, i != j);
+            assert_eq!(xb < yb, i < j);
+            assert_eq!(xb <= yb, i <= j);
+            assert_eq!(xb > yb, i > j);
+            assert_eq!(xb >= yb, i >= j);
+        }
+    }
 }
 
 #[test]
 fn arc_ref_formatting() {
-    let arc1 = ArcRef::new(56);
-    let arc2 = ArcRef::new(88);
-    assert_eq!(format!("{:?}", arc1), "56");
-    assert_eq!(format!("{:?}", arc2), "88");
-    assert_eq!(format!("{}", arc1), "56");
-    assert_eq!(format!("{}", arc2), "88");
+    for (arc, name) in &[(ArcRef::new(56), "56"), (ArcRef::new(88), "88")] {
+        assert_eq!(format!("{}", arc), *name);
+        assert_eq!(format!("{:?}", arc), *name);
+        let _ = format!("{:p}", arc);
+    }
 }
 
 #[test]

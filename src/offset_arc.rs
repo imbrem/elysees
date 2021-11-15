@@ -3,6 +3,7 @@ use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::ptr;
+use core::sync::atomic;
 
 use super::{Arc, OffsetArcBorrow};
 
@@ -138,6 +139,27 @@ impl<T> OffsetArc<T> {
             phantom: PhantomData,
         }
     }
+
+    /// Whether or not the [`OffsetArc`] is uniquely owned (is the refcount 1?).
+    #[inline]
+    pub fn is_unique(this: &Self) -> bool {
+        // See the extensive discussion in [1] for why this needs to be Acquire.
+        //
+        // [1] https://github.com/servo/servo/issues/21186
+        Self::count(this) == 1
+    }
+
+    /// Gets the number of [`Arc`] pointers to this allocation
+    #[inline]
+    pub fn count(this: &Self) -> usize {
+        Self::with_arc(this, Arc::count)
+    }
+
+    /// Gets the number of [`Arc`] pointers to this allocation, with a given load ordering
+    #[inline]
+    pub fn load_count(this: &Self, order: atomic::Ordering) -> usize {
+        Self::with_arc(this, |this| Arc::load_count(this, order))
+    }
 }
 
 #[cfg(test)]
@@ -148,14 +170,25 @@ mod test {
     fn offset_round_trip() {
         let x = Arc::new(6453);
         let mut o = Arc::into_raw_offset(x.clone());
+        {
+            let o_ = Arc::with_raw_offset_arc(&x, |o| o.clone());
+            assert_eq!(*o_, *x);
+        }
+        assert_eq!(OffsetArc::load_count(&o, atomic::Ordering::Relaxed), 2);
+        assert!(!OffsetArc::is_unique(&o));
         let ob = OffsetArc::borrow_arc(&o);
         assert_eq!(*x, *o);
         assert_eq!(*x, *ob);
+        {
+            assert_eq!(Arc::as_ptr(&OffsetArcBorrow::clone_arc(ob)), Arc::as_ptr(&x));
+        }
         let c = OffsetArc::clone_arc(&o);
         assert_eq!(*x, *c);
         assert_eq!(Arc::count(&x), 3);
         let om = OffsetArc::make_mut(&mut o);
         *om = 5;
+        assert_eq!(OffsetArc::load_count(&o, atomic::Ordering::Relaxed), 1);
+        assert!(OffsetArc::is_unique(&o));
         assert_eq!(*o, 5);
         assert_eq!(Arc::count(&x), 2);
     }

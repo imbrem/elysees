@@ -93,6 +93,19 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         }
     }
 
+    /// Provides mutable access to the contents _if_ the [`ArcRef`] is uniquely owned.
+    #[inline]
+    pub fn get_mut(this: &mut Self) -> Option<&mut T> {
+        if Self::is_unique(this) {
+            unsafe {
+                // See make_mut() for documentation of the threadsafety here.
+                Some(&mut (*this.ptr()).data)
+            }
+        } else {
+            None
+        }
+    }
+
     /// Whether or not the [`ArcRef`] is uniquely owned (is the refcount 1, and is `ArcBorrow` itself owned?).
     #[inline]
     pub fn is_unique(this: &Self) -> bool {
@@ -532,9 +545,9 @@ impl<'a, T: Erasable + fmt::Debug> fmt::Debug for ArcRef<'a, T> {
     }
 }
 
-impl<'a, T: Erasable + fmt::Pointer> fmt::Pointer for ArcRef<'a, T> {
+impl<'a, T: Erasable> fmt::Pointer for ArcRef<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Pointer::fmt(&self.ptr(), f)
+        fmt::Pointer::fmt(&self.nn_ptr(), f)
     }
 }
 

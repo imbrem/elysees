@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "stable_deref_trait")]
 use stable_deref_trait::{CloneStableDeref, StableDeref};
 
-use crate::{abort, ArcBorrow, OffsetArc, ArcBox};
+use crate::{abort, ArcBorrow, ArcBox, OffsetArc, OffsetArcBorrow};
 
 /// A soft limit on the amount of references that may be made to an `Arc`.
 ///
@@ -122,6 +122,18 @@ impl<T> Arc<T> {
     pub fn borrow_arc(this: &Self) -> ArcBorrow<'_, T> {
         ArcBorrow {
             p: this.p,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Produce a pointer to the data that can be converted back
+    /// to an Arc. This is basically an [`&Arc<T>`][`Arc`], without the extra indirection.
+    /// It has the benefits of an `&T` but also knows about the underlying refcount
+    /// and can be converted into more [`Arc<T>`][`Arc`]s if necessary.
+    #[inline]
+    pub fn borrow_offset_arc(this: &Self) -> OffsetArcBorrow<'_, T> {
+        OffsetArcBorrow {
+            p: unsafe { ptr::NonNull::new_unchecked(Arc::as_ptr(this) as *mut T) },
             phantom: PhantomData
         }
     }
@@ -129,12 +141,12 @@ impl<T> Arc<T> {
     /// Temporarily converts `self` into a bonafide [`OffsetArc`] and exposes it to the
     /// provided callback. The refcount is not modified.
     #[inline(always)]
-    pub fn with_raw_offset_arc<F, U>(&self, f: F) -> U
+    pub fn with_raw_offset_arc<F, U>(this: &Self, f: F) -> U
     where
         F: FnOnce(&OffsetArc<T>) -> U,
     {
         // Synthesize transient Arc, which never touches the refcount of the ArcInner.
-        let transient = unsafe { ManuallyDrop::new(Arc::into_raw_offset(ptr::read(self))) };
+        let transient = unsafe { ManuallyDrop::new(Arc::into_raw_offset(ptr::read(this))) };
 
         // Expose the transient Arc to the callback, which may clone it if it wants.
         let result = f(&transient);
@@ -249,7 +261,10 @@ impl<T: ?Sized> Arc<T> {
     /// Note that using this can (obviously) cause memory leaks!
     #[inline]
     pub fn leak(this: Arc<T>) -> ArcBorrow<'static, T> {
-        let result = ArcBorrow { p: this.p, phantom: PhantomData };
+        let result = ArcBorrow {
+            p: this.p,
+            phantom: PhantomData,
+        };
         mem::forget(this);
         result
     }
@@ -325,7 +340,9 @@ impl<T> Arc<[MaybeUninit<T>]> {
     /// Must initialize all fields before calling this function.
     #[inline]
     pub unsafe fn assume_init(self) -> Arc<[T]> {
-        Arc::from_raw_inner(ptr::NonNull::new_unchecked(self.into_raw_inner().as_ptr() as _))
+        Arc::from_raw_inner(ptr::NonNull::new_unchecked(
+            self.into_raw_inner().as_ptr() as _
+        ))
     }
 }
 
@@ -476,7 +493,10 @@ impl<T: ?Sized> Arc<T> {
 
     /// Convert this [`Arc`] to an [`ArcBox`], cloning the internal data if necessary for uniqueness
     #[inline]
-    pub fn unique(this: Self) -> ArcBox<T> where T: Clone {
+    pub fn unique(this: Self) -> ArcBox<T>
+    where
+        T: Clone,
+    {
         if Self::is_unique(&this) {
             ArcBox(this)
         } else {
@@ -584,7 +604,7 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for Arc<T> {
     }
 }
 
-impl<T: ?Sized> fmt::Pointer for Arc<T> {
+impl<T> fmt::Pointer for Arc<T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Pointer::fmt(&self.ptr(), f)
@@ -682,7 +702,9 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for Arc<T> {
         // in reality we unsized *mut T to *mut U at the address of the ArcInner. This is the case
         // for all currently envisioned unsized types where the tag of T and ArcInner<T> are simply
         // the same.
-        Arc::from_raw_inner(ptr::NonNull::new_unchecked(p.replace_ptr(new) as *mut ArcInner<U>))
+        Arc::from_raw_inner(ptr::NonNull::new_unchecked(
+            p.replace_ptr(new) as *mut ArcInner<U>
+        ))
     }
 }
 
