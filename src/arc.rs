@@ -56,8 +56,8 @@ unsafe impl<T: ?Sized + Sync + Send> Sync for ArcInner<T> {}
 /// [aa]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 #[repr(transparent)]
 pub struct Arc<T: ?Sized> {
-    pub(crate) p: ptr::NonNull<ArcInner<T>>,
-    pub(crate) phantom: PhantomData<T>,
+    p: ptr::NonNull<ArcInner<T>>,
+    phantom: PhantomData<T>,
 }
 
 unsafe impl<T: ?Sized + Sync + Send> Send for Arc<T> {}
@@ -111,7 +111,7 @@ impl<T> Arc<T> {
         // To find the corresponding pointer to the `ArcInner` we need
         // to subtract the offset of the `data` field from the pointer.
         let ptr = (ptr as *const u8).sub(offset_of!(ArcInner<T>, data));
-        Arc::from_raw_inner(ptr as *mut ArcInner<T>)
+        Arc::from_raw_inner(ptr::NonNull::new_unchecked(ptr as *mut ArcInner<T>))
     }
 
     /// Produce a pointer to the data that can be converted back
@@ -196,13 +196,22 @@ impl<T> Arc<T> {
 }
 
 impl<T: ?Sized> Arc<T> {
+    /// Transform an [`Arc`] into an allocated [`ArcInner`].
+    #[inline]
+    pub(crate) fn into_raw_inner(self) -> ptr::NonNull<ArcInner<T>> {
+        let p = self.p;
+        std::mem::forget(self);
+        p
+    }
+
     /// Construct an [`Arc`] from an allocated [`ArcInner`].
     /// # Safety
-    /// The `ptr` must point to a valid instance, allocated by an [`Arc`]. The reference could will
+    /// The `ptr` must point to a valid instance, allocated by an [`Arc`]. The reference count will
     /// not be modified.
-    pub(crate) unsafe fn from_raw_inner(ptr: *mut ArcInner<T>) -> Self {
+    #[inline]
+    pub(crate) unsafe fn from_raw_inner(p: ptr::NonNull<ArcInner<T>>) -> Self {
         Arc {
-            p: ptr::NonNull::new_unchecked(ptr),
+            p,
             phantom: PhantomData,
         }
     }
@@ -271,7 +280,7 @@ impl<T> Arc<MaybeUninit<T>> {
     /// Must initialize all fields before calling this function.
     #[inline]
     pub unsafe fn assume_init(self) -> Arc<T> {
-        Arc::from_raw_inner(ManuallyDrop::new(self).ptr().cast())
+        Arc::from_raw_inner(self.into_raw_inner().cast())
     }
 }
 
@@ -316,7 +325,7 @@ impl<T> Arc<[MaybeUninit<T>]> {
     /// Must initialize all fields before calling this function.
     #[inline]
     pub unsafe fn assume_init(self) -> Arc<[T]> {
-        Arc::from_raw_inner(ManuallyDrop::new(self).ptr() as _)
+        Arc::from_raw_inner(ptr::NonNull::new_unchecked(self.into_raw_inner().as_ptr() as _))
     }
 }
 
@@ -513,34 +522,41 @@ impl<T: ?Sized> Drop for Arc<T> {
     }
 }
 
-impl<T: ?Sized + PartialEq> PartialEq for Arc<T> {
+impl<T: ?Sized, U: ?Sized + PartialEq<T>> PartialEq<Arc<T>> for Arc<U> {
+    #[inline]
     fn eq(&self, other: &Arc<T>) -> bool {
-        Self::ptr_eq(self, other) || *(*self) == *(*other)
+        *(*self) == *(*other)
     }
 
     #[allow(clippy::partialeq_ne_impl)]
+    #[inline]
     fn ne(&self, other: &Arc<T>) -> bool {
-        !Self::ptr_eq(self, other) && *(*self) != *(*other)
+        *(*self) != *(*other)
     }
 }
 
-impl<T: ?Sized + PartialOrd> PartialOrd for Arc<T> {
+impl<T: ?Sized, U: ?Sized + PartialOrd<T>> PartialOrd<Arc<T>> for Arc<U> {
+    #[inline]
     fn partial_cmp(&self, other: &Arc<T>) -> Option<Ordering> {
         (**self).partial_cmp(&**other)
     }
 
+    #[inline]
     fn lt(&self, other: &Arc<T>) -> bool {
         *(*self) < *(*other)
     }
 
+    #[inline]
     fn le(&self, other: &Arc<T>) -> bool {
         *(*self) <= *(*other)
     }
 
+    #[inline]
     fn gt(&self, other: &Arc<T>) -> bool {
         *(*self) > *(*other)
     }
 
+    #[inline]
     fn ge(&self, other: &Arc<T>) -> bool {
         *(*self) >= *(*other)
     }
@@ -555,18 +571,21 @@ impl<T: ?Sized + Ord> Ord for Arc<T> {
 impl<T: ?Sized + Eq> Eq for Arc<T> {}
 
 impl<T: ?Sized + fmt::Display> fmt::Display for Arc<T> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&**self, f)
     }
 }
 
 impl<T: ?Sized + fmt::Debug> fmt::Debug for Arc<T> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
 impl<T: ?Sized> fmt::Pointer for Arc<T> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Pointer::fmt(&self.ptr(), f)
     }
@@ -580,6 +599,7 @@ impl<T: Default> Default for Arc<T> {
 }
 
 impl<T: ?Sized + Hash> Hash for Arc<T> {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         (**self).hash(state)
     }
@@ -613,6 +633,7 @@ unsafe impl<T: ?Sized> CloneStableDeref for Arc<T> {}
 
 #[cfg(feature = "serde")]
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for Arc<T> {
+    #[inline]
     fn deserialize<D>(deserializer: D) -> Result<Arc<T>, D::Error>
     where
         D: ::serde::de::Deserializer<'de>,
@@ -623,6 +644,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Arc<T> {
 
 #[cfg(feature = "serde")]
 impl<T: Serialize> Serialize for Arc<T> {
+    #[inline]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: ::serde::ser::Serializer,
@@ -660,7 +682,7 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for Arc<T> {
         // in reality we unsized *mut T to *mut U at the address of the ArcInner. This is the case
         // for all currently envisioned unsized types where the tag of T and ArcInner<T> are simply
         // the same.
-        Arc::from_raw_inner(p.replace_ptr(new) as *mut ArcInner<U>)
+        Arc::from_raw_inner(ptr::NonNull::new_unchecked(p.replace_ptr(new) as *mut ArcInner<U>))
     }
 }
 

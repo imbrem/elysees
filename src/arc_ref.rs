@@ -6,24 +6,19 @@ use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
 use core::mem;
 use core::ops::Deref;
+use core::ptr::NonNull;
 use core::sync::atomic;
 use erasable::{Erasable, ErasedPtr};
-use std::ptr::NonNull;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "stable_deref_trait")]
 use stable_deref_trait::{CloneStableDeref, StableDeref};
 
-use crate::{Arc, ArcBorrow, ArcInner};
+use crate::{Arc, ArcBorrow, ArcBox, ArcInner};
 
-/// A *thin* atomically reference counted shared pointer, which may hold either exactly 0 references (in which case it is analogous to an [`ArcBorrow`])
+/// An atomically reference counted shared pointer, which may hold either exactly 0 references (in which case it is analogous to an [`ArcBorrow`])
 /// or 1 (in which case it is analogous to an [`Arc`])
-///
-/// See the documentation for [`Arc`][aa] in the standard library. Unlike the
-/// standard library [`Arc`][aa], this [`Arc`] does not support weak reference counting.
-///
-/// [aa]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 #[repr(transparent)]
 pub struct ArcRef<'a, T: Erasable> {
     pub(crate) p: ErasedPtr,
@@ -48,14 +43,14 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     /// # Examples
     ///
     /// ```
-    /// use elysees::Arc;
+    /// use elysees::ArcRef;
     ///
-    /// let x = Arc::new(3);
-    /// assert_eq!(Arc::try_unwrap(x), Ok(3));
+    /// let x = ArcRef::new(3);
+    /// assert_eq!(ArcRef::try_unwrap(x), Ok(3));
     ///
-    /// let x = Arc::new(4);
-    /// let _y = Arc::clone(&x);
-    /// assert_eq!(*Arc::try_unwrap(x).unwrap_err(), 4);
+    /// let x = ArcRef::new(4);
+    /// let _y = ArcRef::clone(&x);
+    /// assert_eq!(*ArcRef::try_unwrap(x).unwrap_err(), 4);
     /// ```
     #[inline]
     pub fn try_unwrap(this: Self) -> Result<T, Self> {
@@ -64,21 +59,18 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
             Err(borrow) => Err(ArcRef::from_borrow(borrow)),
         }
     }
-}
 
-//TODO: support unsized types for functions in this block
-impl<'a, T: Erasable> ArcRef<'a, T> {
-    /// Makes a mutable reference to the [`Arc`], cloning if necessary
+    /// Makes a mutable reference to the [`ArcRef`], cloning if necessary.
     ///
-    /// This is functionally equivalent to [`Arc::make_mut`][mm] from the standard library.
+    /// This is similar to [`ArcRef::make_mut`][mm] from the standard library.
     ///
-    /// If this [`Arc`] is uniquely owned, `make_mut()` will provide a mutable
-    /// reference to the contents. If not, `make_mut()` will create a _new_ [`Arc`]
+    /// If this [`ArcRef`] is uniquely owned, `make_mut()` will provide a mutable
+    /// reference to the contents. If not, `make_mut()` will create a _new_ [`ArcRef`]
     /// with a copy of the contents, update `this` to point to it, and provide
     /// a mutable reference to its contents.
     ///
     /// This is useful for implementing copy-on-write schemes where you wish to
-    /// avoid copying things if your [`Arc`] is not shared.
+    /// avoid copying things if your [`ArcRef`] is not shared.
     ///
     /// [mm]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html#method.make_mut
     #[inline]
@@ -87,7 +79,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         T: Clone,
     {
         if !this.is_unique() {
-            // Another pointer exists; clone
+            // Another pointer exists *or* this value is borrowed; clone
             *this = ArcRef::new((**this).clone());
         }
 
@@ -101,13 +93,13 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         }
     }
 
-    /// Whether or not the [`Arc`] is uniquely owned (is the refcount 1?).
+    /// Whether or not the [`ArcRef`] is uniquely owned (is the refcount 1, and is `ArcBorrow` itself owned?).
     #[inline]
     pub fn is_unique(&self) -> bool {
         // See the extensive discussion in [1] for why this needs to be Acquire.
         //
         // [1] https://github.com/servo/servo/issues/21186
-        Self::count(self) == 1
+        ArcRef::is_owned(self) && Self::count(self) == 1
     }
 
     /// Gets the number of [`Arc`] pointers to this allocation
@@ -122,56 +114,108 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         this.inner().count.load(order)
     }
 
-    /// Construct an `ArcRef<'a, T>` from an `Arc<T>`
+    /// Returns an [`ArcBox`] if the [`ArcRef`] has exactly one strong, owned reference.
+    ///
+    /// Otherwise, an [`Err`] is returned with the same [`ArcRef`] that was
+    /// passed in.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use elysees::{ArcRef, ArcBox};
+    ///
+    /// let x = ArcRef::new(3);
+    /// assert_eq!(ArcBox::into_inner(ArcRef::try_unique(x).unwrap()), 3);
+    ///
+    /// let x = ArcRef::new(4);
+    /// let _y = ArcRef::clone(&x);
+    /// assert_eq!(
+    ///     *ArcRef::try_unique(x).map(ArcBox::into_inner).unwrap_err(),
+    ///     4,
+    /// );
+    /// ```
+    #[inline]
+    pub fn try_unique(this: Self) -> Result<ArcBox<T>, Self> {
+        if this.is_unique() {
+            // Safety: The current arc is unique and making a `ArcBox`
+            //         from it is sound
+            unsafe {
+                Ok(ArcBox::from_arc(Arc::from_raw_inner(
+                    ArcRef::into_raw_inner(this).0,
+                )))
+            }
+        } else {
+            Err(this)
+        }
+    }
+
+    /// Construct an [`ArcRef<'a, T>`] from an [`Arc<T>`]
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use elysees::{Arc, ArcRef};
+    ///
+    /// let x = Arc::new(3);
+    /// let y = ArcRef::from_arc(x.clone());
+    /// assert_eq!(ArcRef::count(&y), 2);
+    /// ```
     #[inline]
     pub fn from_arc(arc: Arc<T>) -> Self {
-        ArcRef {
-            p: Erasable::erase(unsafe {
-                NonNull::new_unchecked((Erasable::erase(arc.p).as_ptr() as usize | 0b10) as *mut u8)
-            }),
-            phantom: PhantomData,
-        }
+        unsafe { Self::from_raw_inner(arc.into_raw_inner(), true) }
     }
 
     /// Construct an `ArcRef<'a, T>` from an `ArcBorrow<'a, T>`
     #[inline]
     pub fn from_borrow(arc: ArcBorrow<'a, T>) -> Self {
+        unsafe { Self::from_raw_inner(arc.p, false) }
+    }
+
+    /// Try to convert this `ArcRef<'a, T>` into an `Arc<T>` if owned; otherwise, return it as an `ArcBorrow`
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::ArcRef;
+    ///
+    /// let x = ArcRef::new(3);
+    /// assert_eq!(*ArcRef::try_into_arc(x.clone()).unwrap(), 3);
+    /// ```
+    #[inline]
+    pub fn try_into_arc(this: Self) -> Result<Arc<T>, ArcBorrow<'a, T>> {
+        match this.into_raw_inner() {
+            (p, true) => Ok(unsafe { Arc::from_raw_inner(p) }),
+            (p, false) => Err(ArcBorrow {
+                p,
+                phantom: PhantomData,
+            }),
+        }
+    }
+
+    /// Transform an [`ArcRef`] into an allocated [`ArcInner`] and ownership count.
+    #[inline]
+    pub(crate) fn into_raw_inner(self) -> (NonNull<ArcInner<T>>, bool) {
+        let p = self.nn_ptr();
+        let o = ArcRef::is_owned(&self);
+        std::mem::forget(self);
+        (p, o)
+    }
+
+    /// Construct an [`ArcRef`] from an allocated [`ArcInner`] and ownership count.
+    /// # Safety
+    /// The `ptr` must point to a valid instance, allocated by an [`Arc`]. The reference count will
+    /// not be modified.
+    #[inline]
+    pub(crate) unsafe fn from_raw_inner(p: NonNull<ArcInner<T>>, o: bool) -> Self {
         ArcRef {
-            p: Erasable::erase(arc.p),
+            p: Erasable::erase(NonNull::new_unchecked(
+                (Erasable::erase(p).as_ptr() as usize | if o { 0b10 } else { 0b00 }) as *mut u8,
+            )),
             phantom: PhantomData,
         }
     }
 
-    /// Try to get this `ArcRef<'a, T>` as an `Arc<T>`
     #[inline]
-    pub fn try_into_arc(this: Self) -> Result<Arc<T>, ArcBorrow<'a, T>> {
-        let p = this.nn_ptr();
-        let owned = ArcRef::is_owned(&this);
-        core::mem::forget(this);
-        if owned {
-            Ok(Arc {
-                p,
-                phantom: PhantomData,
-            })
-        } else {
-            Err(ArcBorrow {
-                p,
-                phantom: PhantomData,
-            })
-        }
-    }
-
-    /// Convert this `ArcRef<'a, T>` into an `Arc<T>`
-    #[inline]
-    pub fn into_arc(this: Self) -> Arc<T> {
-        match ArcRef::try_into_arc(this) {
-            Ok(arc) => arc,
-            Err(borrow) => borrow.clone_arc(),
-        }
-    }
-
-    #[inline]
-    pub(super) fn inner(&self) -> &ArcInner<T> {
+    pub(crate) fn inner(&self) -> &ArcInner<T> {
         // This unsafety is ok because while this arc is alive we're guaranteed
         // that the inner pointer is valid. Furthermore, we know that the
         // `ArcInner` structure itself is `Sync` because the inner data is
@@ -180,7 +224,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         unsafe { &*self.ptr() }
     }
 
-    /// Test pointer equality between the two [`Arc`]s, i.e. they must be the _same_
+    /// Test pointer equality between the two [`ArcRef`]s, i.e. they must be the _same_
     /// allocation
     #[inline]
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
@@ -199,7 +243,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         self.nn_ptr().as_ptr()
     }
 
-    /// Leak this [`Arc<T>`][`Arc`], getting an [`ArcBorrow<'static, T>`][`ArcBorrow`]
+    /// Leak this [`ArcRef`], getting an [`ArcBorrow<'static, T>`]
     ///
     /// You can call the [`get`][`ArcBorrow::get`] method on the returned [`ArcBorrow`] to get an `&'static T`.
     /// Note that using this can (obviously) cause memory leaks!
@@ -209,56 +253,197 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
             p: this.nn_ptr(),
             phantom: PhantomData,
         };
-        mem::forget(this);
+        mem::forget(ArcRef::into_owned(this));
         result
     }
 
-    /// Get whether this `ArcRef<'a, T>` is owned
+    /// Get whether this [`ArcRef`] is owned
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::ArcRef;
+    ///
+    /// let x = ArcRef::new(3);
+    /// assert!(ArcRef::is_owned(&x));
+    /// let y = x.clone();
+    /// assert!(ArcRef::is_owned(&y));
+    /// let z = ArcRef::into_borrow(&x);
+    /// assert!(!ArcRef::is_owned(&z));
+    /// ```
     #[inline]
     pub fn is_owned(this: &Self) -> bool {
-        this.p.as_ptr() as usize | 0b10 != 0
+        this.p.as_ptr() as usize & 0b10 != 0
     }
 
     /// Borrow this as an [`ArcBorrow`]. This does *not* bump the refcount.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::{ArcBorrow, ArcRef};
+    ///
+    /// let x: ArcRef<u64> = ArcRef::new(3);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// let y: ArcBorrow<u64> = ArcRef::borrow_arc(&x);
+    /// assert_eq!(ArcRef::as_ptr(&x), ArcBorrow::into_raw(y));
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// assert_eq!(ArcBorrow::count(y), 1);
+    /// ```
     #[inline]
-    pub fn borrow_arc(&'a self) -> ArcBorrow<'a, T> {
+    pub fn borrow_arc(this: &'a Self) -> ArcBorrow<'a, T> {
         ArcBorrow {
-            p: self.nn_ptr(),
+            p: this.nn_ptr(),
             phantom: PhantomData,
         }
     }
 
-    /// Clone this as an [`Arc`].
+    /// Get this as an [`Arc`], bumping the refcount if necessary.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::{Arc, ArcRef};
+    ///
+    /// let x = ArcRef::new(3);
+    /// let y = ArcRef::into_borrow(&x);
+    /// assert_eq!(ArcRef::as_ptr(&x), ArcRef::as_ptr(&y));
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// assert_eq!(ArcRef::count(&y), 1);
+    /// let z = ArcRef::into_arc(y);
+    /// assert_eq!(ArcRef::as_ptr(&x), Arc::as_ptr(&z));
+    /// assert_eq!(ArcRef::count(&x), 2);
+    /// assert_eq!(Arc::count(&z), 2);
+    /// let w = ArcRef::into_arc(x);
+    /// assert_eq!(Arc::count(&w), 2);
+    /// assert_eq!(Arc::count(&z), 2);
+    /// ```
     #[inline]
-    pub fn clone_arc(&'a self) -> Arc<T> {
-        self.borrow_arc().clone_arc()
+    pub fn into_arc(this: ArcRef<'a, T>) -> Arc<T> {
+        match ArcRef::try_into_arc(this) {
+            Ok(arc) => arc,
+            Err(borrow) => ArcBorrow::clone_arc(borrow),
+        }
     }
 
-    /// Get this as an owned pointer
+    /// Clone this as an [`Arc`].
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::{Arc, ArcRef};
+    ///
+    /// let x: ArcRef<u64> = ArcRef::new(3);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// let y: Arc<u64> = ArcRef::clone_arc(&x);
+    /// assert_eq!(ArcRef::as_ptr(&x), Arc::as_ptr(&y));
+    /// assert_eq!(ArcRef::count(&x), 2);
+    /// assert_eq!(Arc::count(&y), 2);
+    /// ```
+    #[inline]
+    pub fn clone_arc(this: &'a Self) -> Arc<T> {
+        ArcBorrow::clone_arc(ArcRef::borrow_arc(this))
+    }
+
+    /// Get this as an owned [`ArcRef`], with the `'static` lifetime
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::ArcRef;
+    ///
+    /// let x = ArcRef::new(7);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// let y = ArcRef::into_borrow(&x);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// assert_eq!(ArcRef::count(&y), 1);
+    /// let z = ArcRef::into_owned(y);
+    /// assert_eq!(ArcRef::as_ptr(&x), ArcRef::as_ptr(&z));
+    /// assert_eq!(ArcRef::count(&x), 2);
+    /// assert_eq!(ArcRef::count(&z), 2);
+    /// ```
     #[inline]
     pub fn into_owned(this: Self) -> ArcRef<'static, T> {
         match Self::try_into_arc(this) {
             Ok(arc) => ArcRef::from_arc(arc),
-            Err(borrow) => ArcRef::from_arc(borrow.clone_arc()),
+            Err(borrow) => ArcRef::from_arc(ArcBorrow::clone_arc(borrow)),
         }
     }
 
-    /// Get clone this into an owned pointer
+    /// Borrow this as an [`ArcRef`]. This does *not* bump the refcount.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::ArcRef;
+    ///
+    /// let x = ArcRef::new(8);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// let y = ArcRef::into_borrow(&x);
+    /// assert_eq!(ArcRef::as_ptr(&x), ArcRef::as_ptr(&y));
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// assert_eq!(ArcRef::count(&y), 1);
+    /// ```
+    #[inline]
+    pub fn into_borrow(this: &'a ArcRef<'a, T>) -> ArcRef<'a, T> {
+        ArcRef::from_borrow(ArcRef::borrow_arc(&this))
+    }
+
+    /// Clone this into an owned [`ArcRef`], with the `'static` lifetime
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::ArcRef;
+    ///
+    /// let x = ArcRef::new(7);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// let y = ArcRef::into_borrow(&x);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// assert_eq!(ArcRef::count(&y), 1);
+    /// let z = ArcRef::clone_into_owned(&y);
+    /// assert_eq!(ArcRef::as_ptr(&x), ArcRef::as_ptr(&z));
+    /// assert_eq!(ArcRef::count(&x), 2);
+    /// assert_eq!(ArcRef::count(&y), 2);
+    /// assert_eq!(ArcRef::count(&z), 2);
+    /// ```
     #[inline]
     pub fn clone_into_owned(this: &Self) -> ArcRef<'static, T> {
-        ArcRef::from_arc(this.clone_arc())
+        ArcRef::from_arc(ArcRef::clone_arc(this))
     }
 
-    /// Get the internal pointer of an [`ArcBorrow`]
+    /// Get the internal pointer of an [`ArcBorrow`]. This does *not* bump the refcount.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::{Arc, ArcRef};
+    ///
+    /// let x = ArcRef::new(7);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// let x_ = x.clone();
+    /// assert_eq!(ArcRef::count(&x), 2);
+    /// let p = ArcRef::into_raw(x_);
+    /// assert_eq!(ArcRef::count(&x), 2);
+    /// assert_eq!(ArcRef::as_ptr(&x), p);
+    /// let y = unsafe { Arc::from_raw(p) };
+    /// assert_eq!(ArcRef::as_ptr(&x), Arc::as_ptr(&y));
+    /// assert_eq!(ArcRef::count(&x), 2);
+    /// std::mem::drop(y);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// ```
     #[inline]
     pub fn into_raw(this: Self) -> *const T {
-        ArcBorrow::into_raw(this.borrow_arc())
+        let result = ArcBorrow::into_raw(ArcRef::borrow_arc(&this));
+        mem::forget(this);
+        result
     }
 
-    /// Get the internal pointer of an [`ArcBorrow`]
+    /// Get the internal pointer of an [`ArcBorrow`]. This does *not* bump the refcount.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use elysees::ArcRef;
+    /// let x = ArcRef::new(7);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// let p = ArcRef::as_ptr(&x);
+    /// assert_eq!(ArcRef::count(&x), 1);
+    /// ```
     #[inline]
     pub fn as_ptr(this: &Self) -> *const T {
-        ArcBorrow::into_raw(this.borrow_arc())
+        ArcBorrow::into_raw(ArcRef::borrow_arc(this))
     }
 }
 
@@ -266,10 +451,7 @@ impl<'a, T: Erasable> Drop for ArcRef<'a, T> {
     #[inline]
     fn drop(&mut self) {
         if ArcRef::is_owned(self) {
-            core::mem::drop(Arc {
-                p: self.nn_ptr(),
-                phantom: PhantomData,
-            })
+            core::mem::drop(unsafe { Arc::from_raw_inner(self.nn_ptr()) })
         }
     }
 }
@@ -277,8 +459,8 @@ impl<'a, T: Erasable> Drop for ArcRef<'a, T> {
 impl<'a, T: Erasable> Clone for ArcRef<'a, T> {
     #[inline]
     fn clone(&self) -> Self {
-        if Self::is_owned(self) {
-            Self::from_arc(self.clone_arc())
+        if ArcRef::is_owned(self) {
+            ArcRef::from_arc(ArcRef::clone_arc(self))
         } else {
             ArcRef {
                 p: self.p,

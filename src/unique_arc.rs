@@ -1,12 +1,11 @@
 use alloc::{alloc::Layout, boxed::Box};
+use core::borrow::{Borrow, BorrowMut};
 use core::convert::TryFrom;
 use core::fmt::{self, Debug, Display, Formatter};
-use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::AtomicUsize;
-use core::borrow::{Borrow, BorrowMut};
 
 use super::{Arc, ArcInner};
 
@@ -54,10 +53,7 @@ impl<T> ArcBox<T> {
                 .cast::<ArcInner<MaybeUninit<T>>>();
             ptr::write(&mut p.as_mut().count, AtomicUsize::new(1));
 
-            ArcBox(Arc {
-                p,
-                phantom: PhantomData,
-            })
+            ArcBox(Arc::from_raw_inner(p))
         }
     }
 
@@ -108,10 +104,7 @@ impl<T> ArcBox<MaybeUninit<T>> {
     /// has actually been initialized before calling this method.
     #[inline]
     pub unsafe fn assume_init(this: Self) -> ArcBox<T> {
-        ArcBox(Arc {
-            p: ManuallyDrop::new(this).0.p.cast(),
-            phantom: PhantomData,
-        })
+        ArcBox(Arc::from_raw_inner(this.0.into_raw_inner().cast()))
     }
 }
 
@@ -166,7 +159,6 @@ impl<T: Display> Display for ArcBox<T> {
         Display::fmt(&self.0, f)
     }
 }
-
 
 impl<T: ?Sized> Borrow<T> for ArcBox<T> {
     #[inline]

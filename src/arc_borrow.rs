@@ -1,9 +1,11 @@
-use core::mem;
+use core::hash::{Hash, Hasher};
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::ptr;
-use std::marker::PhantomData;
-use std::sync::atomic;
+use core::{fmt, mem};
+use core::borrow::Borrow;
+use core::sync::atomic;
+use core::{cmp::Ordering, marker::PhantomData};
 
 use super::{Arc, ArcInner, OffsetArc};
 
@@ -13,7 +15,6 @@ use super::{Arc, ArcInner, OffsetArc};
 ///
 /// [`ArcBorrow`] lets us deal with borrows of known-refcounted objects
 /// without needing to worry about where the [`Arc<T>`][`Arc`] is.
-#[derive(Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct ArcBorrow<'a, T: ?Sized + 'a> {
     pub(crate) p: ptr::NonNull<ArcInner<T>>,
@@ -31,11 +32,8 @@ impl<'a, T> Clone for ArcBorrow<'a, T> {
 impl<'a, T> ArcBorrow<'a, T> {
     /// Clone this as an [`Arc<T>`]. This bumps the refcount.
     #[inline]
-    pub fn clone_arc(&self) -> Arc<T> {
-        let arc = Arc {
-            p: self.p,
-            phantom: PhantomData,
-        };
+    pub fn clone_arc(this: Self) -> Arc<T> {
+        let arc = unsafe { Arc::from_raw_inner(this.p) };
         // addref it!
         mem::forget(arc.clone());
         arc
@@ -114,7 +112,6 @@ impl<'a, T> Deref for ArcBorrow<'a, T> {
 ///
 /// [`OffsetArcBorrow`] lets us deal with borrows of known-refcounted objects
 /// without needing to worry about where the [`Arc<T>`] is.
-#[derive(Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct OffsetArcBorrow<'a, T: ?Sized + 'a> {
     pub(crate) p: ptr::NonNull<T>,
@@ -182,5 +179,174 @@ impl<'a, T> Deref for OffsetArcBorrow<'a, T> {
     #[inline]
     fn deref(&self) -> &T {
         self.get()
+    }
+}
+
+impl<'a, 'b, T, U: PartialEq<T>> PartialEq<ArcBorrow<'a, T>> for ArcBorrow<'b, U> {
+    #[inline]
+    fn eq(&self, other: &ArcBorrow<'a, T>) -> bool {
+        *(*self) == *(*other)
+    }
+
+    #[allow(clippy::partialeq_ne_impl)]
+    #[inline]
+    fn ne(&self, other: &ArcBorrow<'a, T>) -> bool {
+        *(*self) != *(*other)
+    }
+}
+
+impl<'a, 'b, T, U: PartialOrd<T>> PartialOrd<ArcBorrow<'a, T>> for ArcBorrow<'b, U> {
+    #[inline]
+    fn partial_cmp(&self, other: &ArcBorrow<'a, T>) -> Option<Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+
+    #[inline]
+    fn lt(&self, other: &ArcBorrow<'a, T>) -> bool {
+        *(*self) < *(*other)
+    }
+
+    #[inline]
+    fn le(&self, other: &ArcBorrow<'a, T>) -> bool {
+        *(*self) <= *(*other)
+    }
+
+    #[inline]
+    fn gt(&self, other: &ArcBorrow<'a, T>) -> bool {
+        *(*self) > *(*other)
+    }
+
+    #[inline]
+    fn ge(&self, other: &ArcBorrow<'a, T>) -> bool {
+        *(*self) >= *(*other)
+    }
+}
+
+impl<'a, T: Ord> Ord for ArcBorrow<'a, T> {
+    #[inline]
+    fn cmp(&self, other: &ArcBorrow<'a, T>) -> Ordering {
+        (**self).cmp(&**other)
+    }
+}
+
+impl<'a, T: Eq> Eq for ArcBorrow<'a, T> {}
+
+impl<'a, T: fmt::Display> fmt::Display for ArcBorrow<'a, T> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
+    }
+}
+
+impl<'a, T: fmt::Debug> fmt::Debug for ArcBorrow<'a, T> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T: Hash> Hash for ArcBorrow<'_, T> {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (**self).hash(state)
+    }
+}
+
+impl<T> Borrow<T> for ArcBorrow<'_, T> {
+    #[inline]
+    fn borrow(&self) -> &T {
+        &**self
+    }
+}
+
+impl<T> AsRef<T> for ArcBorrow<'_, T> {
+    #[inline]
+    fn as_ref(&self) -> &T {
+        &**self
+    }
+}
+
+
+impl<'a, 'b, T, U: PartialEq<T>> PartialEq<OffsetArcBorrow<'a, T>> for OffsetArcBorrow<'b, U> {
+    #[inline]
+    fn eq(&self, other: &OffsetArcBorrow<'a, T>) -> bool {
+        *(*self) == *(*other)
+    }
+
+    #[allow(clippy::partialeq_ne_impl)]
+    #[inline]
+    fn ne(&self, other: &OffsetArcBorrow<'a, T>) -> bool {
+        *(*self) != *(*other)
+    }
+}
+
+impl<'a, 'b, T, U: PartialOrd<T>> PartialOrd<OffsetArcBorrow<'a, T>> for OffsetArcBorrow<'b, U> {
+    #[inline]
+    fn partial_cmp(&self, other: &OffsetArcBorrow<'a, T>) -> Option<Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+
+    #[inline]
+    fn lt(&self, other: &OffsetArcBorrow<'a, T>) -> bool {
+        *(*self) < *(*other)
+    }
+
+    #[inline]
+    fn le(&self, other: &OffsetArcBorrow<'a, T>) -> bool {
+        *(*self) <= *(*other)
+    }
+
+    #[inline]
+    fn gt(&self, other: &OffsetArcBorrow<'a, T>) -> bool {
+        *(*self) > *(*other)
+    }
+
+    #[inline]
+    fn ge(&self, other: &OffsetArcBorrow<'a, T>) -> bool {
+        *(*self) >= *(*other)
+    }
+}
+
+impl<'a, T: Ord> Ord for OffsetArcBorrow<'a, T> {
+    #[inline]
+    fn cmp(&self, other: &OffsetArcBorrow<'a, T>) -> Ordering {
+        (**self).cmp(&**other)
+    }
+}
+
+impl<'a, T: Eq> Eq for OffsetArcBorrow<'a, T> {}
+
+impl<'a, T: fmt::Display> fmt::Display for OffsetArcBorrow<'a, T> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&**self, f)
+    }
+}
+
+impl<'a, T: fmt::Debug> fmt::Debug for OffsetArcBorrow<'a, T> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T: Hash> Hash for OffsetArcBorrow<'_, T> {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (**self).hash(state)
+    }
+}
+
+impl<T> Borrow<T> for OffsetArcBorrow<'_, T> {
+    #[inline]
+    fn borrow(&self) -> &T {
+        &**self
+    }
+}
+
+impl<T> AsRef<T> for OffsetArcBorrow<'_, T> {
+    #[inline]
+    fn as_ref(&self) -> &T {
+        &**self
     }
 }

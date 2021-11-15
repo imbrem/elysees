@@ -54,6 +54,7 @@ impl<T> Clone for OffsetArc<T> {
 }
 
 impl<T> Drop for OffsetArc<T> {
+    #[inline]
     fn drop(&mut self) {
         let _ = Arc::from_raw_offset(OffsetArc {
             p: self.p,
@@ -63,17 +64,20 @@ impl<T> Drop for OffsetArc<T> {
 }
 
 impl<T: fmt::Debug> fmt::Debug for OffsetArc<T> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
 impl<T: PartialEq> PartialEq for OffsetArc<T> {
+    #[inline]
     fn eq(&self, other: &OffsetArc<T>) -> bool {
         *(*self) == *(*other)
     }
 
     #[allow(clippy::partialeq_ne_impl)]
+    #[inline]
     fn ne(&self, other: &OffsetArc<T>) -> bool {
         *(*self) != *(*other)
     }
