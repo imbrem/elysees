@@ -7,7 +7,7 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::AtomicUsize;
 
-use super::{Arc, ArcInner};
+use super::{Arc, ArcRef, ArcInner};
 
 /// An [`Arc`] that is known to be uniquely owned
 ///
@@ -62,7 +62,7 @@ impl<T> ArcBox<T> {
         // Wrap the Arc in a `ManuallyDrop` so that its drop routine never runs
         let this = ManuallyDrop::new(this.0);
         debug_assert!(
-            this.is_unique(),
+            Arc::is_unique(&this),
             "attempted to call `.into_inner()` on a `ArcBox` with a non-zero ref count",
         );
 
@@ -71,10 +71,16 @@ impl<T> ArcBox<T> {
         //         wrapped it in a `ManuallyDrop`
         unsafe { Box::from_raw(this.ptr()).data }
     }
+
+    /// Convert to a shareable [`ArcRef<'static, T>`] once we're done mutating it
+    #[inline]
+    pub fn shareable_ref(self) -> ArcRef<'static, T> {
+        ArcRef::from_arc(self.0)
+    }
 }
 
 impl<T: ?Sized> ArcBox<T> {
-    /// Convert to a shareable Arc<T> once we're done mutating it
+    /// Convert to a shareable [`Arc<T>`] once we're done mutating it
     #[inline]
     pub fn shareable(self) -> Arc<T> {
         self.0

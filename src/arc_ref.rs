@@ -78,7 +78,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     where
         T: Clone,
     {
-        if !this.is_unique() {
+        if !ArcRef::is_unique(&this) {
             // Another pointer exists *or* this value is borrowed; clone
             *this = ArcRef::new((**this).clone());
         }
@@ -95,11 +95,11 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
 
     /// Whether or not the [`ArcRef`] is uniquely owned (is the refcount 1, and is `ArcBorrow` itself owned?).
     #[inline]
-    pub fn is_unique(&self) -> bool {
+    pub fn is_unique(this: &Self) -> bool {
         // See the extensive discussion in [1] for why this needs to be Acquire.
         //
         // [1] https://github.com/servo/servo/issues/21186
-        ArcRef::is_owned(self) && Self::count(self) == 1
+        ArcRef::is_owned(this) && Self::count(this) == 1
     }
 
     /// Gets the number of [`Arc`] pointers to this allocation
@@ -136,7 +136,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     /// ```
     #[inline]
     pub fn try_unique(this: Self) -> Result<ArcBox<T>, Self> {
-        if this.is_unique() {
+        if ArcRef::is_unique(&this) {
             // Safety: The current arc is unique and making a `ArcBox`
             //         from it is sound
             unsafe {

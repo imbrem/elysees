@@ -1,13 +1,13 @@
+use core::borrow::Borrow;
 use core::hash::{Hash, Hasher};
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
 use core::ptr;
-use core::{fmt, mem};
-use core::borrow::Borrow;
 use core::sync::atomic;
 use core::{cmp::Ordering, marker::PhantomData};
+use core::{fmt, mem};
 
-use super::{Arc, ArcInner, OffsetArc};
+use super::{Arc, ArcInner, ArcRef, OffsetArc};
 
 /// A "borrowed [`Arc`]". This is essentially a reference to an `ArcInner<T>`
 ///
@@ -55,14 +55,21 @@ impl<'a, T> ArcBorrow<'a, T> {
 
     /// Borrow this as an [`Arc`]. This does *not* bump the refcount.
     #[inline]
-    pub fn as_arc(&self) -> &Arc<T> {
-        unsafe { &*(self as *const _ as *const Arc<T>) }
+    pub fn as_arc(this: &Self) -> &Arc<T> {
+        unsafe { &*(this as *const _ as *const Arc<T>) }
+    }
+
+    /// Borrow this as an [`ArcRef`]. This does *not* bump the refcount.
+    #[inline]
+    pub fn as_arc_ref(this: &'a ArcBorrow<'a, T>) -> &'a ArcRef<'a, T> {
+        unsafe { &*(this as *const _ as *const ArcRef<'a, T>) }
     }
 
     /// Get the internal pointer of an [`ArcBorrow`]
     #[inline]
     pub fn into_raw(this: Self) -> *const T {
-        this.as_arc().as_ptr()
+        let arc = Self::as_arc(&this);
+        Arc::as_ptr(arc)
     }
 
     #[inline]
@@ -265,7 +272,6 @@ impl<T> AsRef<T> for ArcBorrow<'_, T> {
         &**self
     }
 }
-
 
 impl<'a, 'b, T, U: PartialEq<T>> PartialEq<OffsetArcBorrow<'a, T>> for OffsetArcBorrow<'b, U> {
     #[inline]

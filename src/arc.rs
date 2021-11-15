@@ -87,7 +87,7 @@ impl<T> Arc<T> {
     /// It is recommended to use [`OffsetArc`] for this.
     #[inline]
     pub fn into_raw(this: Self) -> *const T {
-        let ptr = this.as_ptr();
+        let ptr = Arc::as_ptr(&this);
         mem::forget(this);
         ptr
     }
@@ -96,8 +96,8 @@ impl<T> Arc<T> {
     ///
     /// Same as into_raw except `self` isn't consumed.
     #[inline]
-    pub fn as_ptr(&self) -> *const T {
-        unsafe { &((*self.ptr()).data) as *const _ }
+    pub fn as_ptr(this: &Arc<T>) -> *const T {
+        unsafe { &((*this.ptr()).data) as *const _ }
     }
 
     /// Reconstruct the [`Arc<T>`][`Arc`] from a raw pointer obtained from [`into_raw`][`Arc::into_raw`]
@@ -119,9 +119,9 @@ impl<T> Arc<T> {
     /// It has the benefits of an `&T` but also knows about the underlying refcount
     /// and can be converted into more [`Arc<T>`][`Arc`]s if necessary.
     #[inline]
-    pub fn borrow_arc(&self) -> ArcBorrow<'_, T> {
+    pub fn borrow_arc(this: &Self) -> ArcBorrow<'_, T> {
         ArcBorrow {
-            p: self.p,
+            p: this.p,
             phantom: PhantomData
         }
     }
@@ -392,7 +392,7 @@ impl<T: Clone + ?Sized> Arc<T> {
     /// [mm]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html#method.make_mut
     #[inline]
     pub fn make_mut(this: &mut Self) -> &mut T {
-        if !this.is_unique() {
+        if !Self::is_unique(this) {
             // Another pointer exists; clone
             *this = Arc::new((**this).clone());
         }
@@ -412,7 +412,7 @@ impl<T: ?Sized> Arc<T> {
     /// Provides mutable access to the contents _if_ the [`Arc`] is uniquely owned.
     #[inline]
     pub fn get_mut(this: &mut Self) -> Option<&mut T> {
-        if this.is_unique() {
+        if Self::is_unique(this) {
             unsafe {
                 // See make_mut() for documentation of the threadsafety here.
                 Some(&mut (*this.ptr()).data)
@@ -424,11 +424,11 @@ impl<T: ?Sized> Arc<T> {
 
     /// Whether or not the [`Arc`] is uniquely owned (is the refcount 1?).
     #[inline]
-    pub fn is_unique(&self) -> bool {
+    pub fn is_unique(this: &Self) -> bool {
         // See the extensive discussion in [1] for why this needs to be Acquire.
         //
         // [1] https://github.com/servo/servo/issues/21186
-        Self::count(self) == 1
+        Self::count(this) == 1
     }
 
     /// Gets the number of [`Arc`] pointers to this allocation
@@ -465,7 +465,7 @@ impl<T: ?Sized> Arc<T> {
     /// ```
     #[inline]
     pub fn try_unique(this: Self) -> Result<ArcBox<T>, Self> {
-        if this.is_unique() {
+        if Self::is_unique(&this) {
             // Safety: The current arc is unique and making a `ArcBox`
             //         from it is sound
             unsafe { Ok(ArcBox::from_arc(this)) }
@@ -477,7 +477,7 @@ impl<T: ?Sized> Arc<T> {
     /// Convert this [`Arc`] to an [`ArcBox`], cloning the internal data if necessary for uniqueness
     #[inline]
     pub fn unique(this: Self) -> ArcBox<T> where T: Clone {
-        if this.is_unique() {
+        if Self::is_unique(&this) {
             ArcBox(this)
         } else {
             ArcBox::new(this.deref().clone())
@@ -738,14 +738,14 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn maybeuninit_array() {
         let mut arc: Arc<[MaybeUninit<_>]> = Arc::new_uninit_slice(5);
-        assert!(arc.is_unique());
+        assert!(Arc::is_unique(&arc));
         for (uninit, index) in arc.as_mut_slice().iter_mut().zip(0..5) {
             let ptr = uninit.as_mut_ptr();
             unsafe { core::ptr::write(ptr, index) };
         }
 
         let arc = unsafe { arc.assume_init() };
-        assert!(arc.is_unique());
+        assert!(Arc::is_unique(&arc));
         // Using clone to that the layout generated in new_uninit_slice is compatible
         // with ArcInner.
         let arcs = [
@@ -762,7 +762,7 @@ mod tests {
         // Drop the arcs and check the count and the content to
         // make sure it isn't corrupted.
         drop(arcs);
-        assert!(arc.is_unique());
+        assert!(Arc::is_unique(&arc));
         assert_eq!(*arc, [0, 1, 2, 3, 4]);
     }
 }
