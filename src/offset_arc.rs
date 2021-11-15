@@ -49,7 +49,7 @@ impl<T> Deref for OffsetArc<T> {
 impl<T> Clone for OffsetArc<T> {
     #[inline]
     fn clone(&self) -> Self {
-        Arc::into_raw_offset(self.clone_arc())
+        Arc::into_raw_offset(Self::clone_arc(self))
     }
 }
 
@@ -87,12 +87,12 @@ impl<T> OffsetArc<T> {
     /// Temporarily converts `self` into a bonafide [`Arc`] and exposes it to the
     /// provided callback. The refcount is not modified.
     #[inline]
-    pub fn with_arc<F, U>(&self, f: F) -> U
+    pub fn with_arc<F, U>(this: &Self, f: F) -> U
     where
         F: FnOnce(&Arc<T>) -> U,
     {
         // Synthesize transient Arc, which never touches the refcount of the ArcInner.
-        let transient = unsafe { ManuallyDrop::new(Arc::from_raw(self.p.as_ptr())) };
+        let transient = unsafe { ManuallyDrop::new(Arc::from_raw(this.p.as_ptr())) };
 
         // Expose the transient Arc to the callback, which may clone it if it wants
         // and forward the result to the user
@@ -104,38 +104,59 @@ impl<T> OffsetArc<T> {
     ///
     /// This is functionally the same thing as [`Arc::make_mut`]
     #[inline]
-    pub fn make_mut(&mut self) -> &mut T
+    pub fn make_mut(this: &mut Self) -> &mut T
     where
         T: Clone,
     {
         unsafe {
             // extract the OffsetArc as an owned variable
-            let this = ptr::read(self);
+            let this_ = ptr::read(this);
             // treat it as a real Arc
-            let mut arc = Arc::from_raw_offset(this);
+            let mut arc = Arc::from_raw_offset(this_);
             // obtain the mutable reference. Cast away the lifetime
             // This may mutate `arc`
             let ret = Arc::make_mut(&mut arc) as *mut _;
             // Store the possibly-mutated arc back inside, after converting
             // it to a OffsetArc again
-            ptr::write(self, Arc::into_raw_offset(arc));
+            ptr::write(this, Arc::into_raw_offset(arc));
             &mut *ret
         }
     }
 
     /// Clone it as an [`Arc`]
     #[inline]
-    pub fn clone_arc(&self) -> Arc<T> {
-        OffsetArc::with_arc(self, |a| a.clone())
+    pub fn clone_arc(this: &Self) -> Arc<T> {
+        OffsetArc::with_arc(this, |a| a.clone())
     }
 
     /// Produce a pointer to the data that can be converted back
     /// to an [`Arc`]
     #[inline]
-    pub fn borrow_arc(&self) -> OffsetArcBorrow<'_, T> {
+    pub fn borrow_arc(this: &Self) -> OffsetArcBorrow<'_, T> {
         OffsetArcBorrow {
-            p: self.p,
+            p: this.p,
             phantom: PhantomData,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn offset_round_trip() {
+        let x = Arc::new(6453);
+        let mut o = Arc::into_raw_offset(x.clone());
+        let ob = OffsetArc::borrow_arc(&o);
+        assert_eq!(*x, *o);
+        assert_eq!(*x, *ob);
+        let c = OffsetArc::clone_arc(&o);
+        assert_eq!(*x, *c);
+        assert_eq!(Arc::count(&x), 3);
+        let om = OffsetArc::make_mut(&mut o);
+        *om = 5;
+        assert_eq!(*o, 5);
+        assert_eq!(Arc::count(&x), 2);
     }
 }
