@@ -11,7 +11,7 @@ edition = "2021"
 
 [features]
 std = []
-default = ["serde", "stable_deref_trait", "unsize", "std", "slice-dst"]
+default = ["serde", "stable_deref_trait", "unsize", "std", "slice-dst", "arc-swap"]
 
 [dependencies]
 memoffset = "0.6"

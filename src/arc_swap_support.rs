@@ -1,8 +1,6 @@
 use arc_swap::RefCnt;
 
 use crate::Arc;
-use core::ffi::c_void;
-use core::ptr::NonNull;
 
 unsafe impl<T> RefCnt for Arc<T> {
     type Base = T;

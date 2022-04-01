@@ -21,15 +21,15 @@ pub struct ArcBorrow<'a, T: ?Sized + 'a> {
     pub(crate) phantom: PhantomData<&'a T>,
 }
 
-impl<'a, T> Copy for ArcBorrow<'a, T> {}
-impl<'a, T> Clone for ArcBorrow<'a, T> {
+impl<'a, T: ?Sized> Copy for ArcBorrow<'a, T> {}
+impl<'a, T: ?Sized> Clone for ArcBorrow<'a, T> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, T> ArcBorrow<'a, T> {
+impl<'a, T: ?Sized> ArcBorrow<'a, T> {
     /// Clone this as an [`Arc<T>`]. This bumps the refcount.
     #[inline]
     pub fn clone_arc(this: Self) -> Arc<T> {
@@ -59,12 +59,6 @@ impl<'a, T> ArcBorrow<'a, T> {
         unsafe { &*(this as *const _ as *const Arc<T>) }
     }
 
-    /// Borrow this as an [`ArcRef`]. This does *not* bump the refcount.
-    #[inline]
-    pub fn as_arc_ref(this: &'a ArcBorrow<'a, T>) -> &'a ArcRef<'a, T> {
-        unsafe { &*(this as *const _ as *const ArcRef<'a, T>) }
-    }
-
     /// Get the internal pointer of an [`ArcBorrow`]
     #[inline]
     pub fn into_raw(this: Self) -> *const T {
@@ -92,6 +86,14 @@ impl<'a, T> ArcBorrow<'a, T> {
     #[inline]
     pub fn load_count(this: Self, order: atomic::Ordering) -> usize {
         this.inner().count.load(order)
+    }
+}
+
+impl<'a, T> ArcBorrow<'a, T> {
+    /// Borrow this as an [`ArcRef`]. This does *not* bump the refcount.
+    #[inline]
+    pub fn as_arc_ref(this: &'a ArcBorrow<'a, T>) -> &'a ArcRef<'a, T> {
+        unsafe { &*(this as *const _ as *const ArcRef<'a, T>) }
     }
 }
 

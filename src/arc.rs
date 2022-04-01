@@ -15,11 +15,12 @@ use core::ptr;
 use core::sync::atomic;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use core::{isize, usize};
+use erasable::{Erasable, ErasablePtr};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "slice-dst")]
-use slice_dst::{SliceDst, AllocSliceDst, TryAllocSliceDst};
+use slice_dst::{AllocSliceDst, SliceDst, TryAllocSliceDst};
 #[cfg(feature = "stable_deref_trait")]
 use stable_deref_trait::{CloneStableDeref, StableDeref};
 
@@ -79,26 +80,6 @@ impl<T> Arc<T> {
         }
     }
 
-    /// Convert the [`Arc`] to a raw pointer, suitable for use across FFI
-    ///
-    /// Note: This returns a pointer to the data `T`, which is offset in the allocation.
-    ///
-    /// It is recommended to use [`OffsetArc`] for this.
-    #[inline]
-    pub fn into_raw(this: Self) -> *const T {
-        let ptr = Arc::as_ptr(&this);
-        mem::forget(this);
-        ptr
-    }
-
-    /// Returns the raw pointer.
-    ///
-    /// Same as into_raw except `self` isn't consumed.
-    #[inline]
-    pub fn as_ptr(this: &Arc<T>) -> *const T {
-        unsafe { &((*this.ptr()).data) as *const _ }
-    }
-
     /// Reconstruct the [`Arc<T>`][`Arc`] from a raw pointer obtained from [`into_raw`][`Arc::into_raw`]
     ///
     /// Note: This raw pointer will be offset in the allocation and must be preceded
@@ -111,18 +92,6 @@ impl<T> Arc<T> {
         // to subtract the offset of the `data` field from the pointer.
         let ptr = (ptr as *const u8).sub(offset_of!(ArcInner<T>, data));
         Arc::from_raw_inner(ptr::NonNull::new_unchecked(ptr as *mut ArcInner<T>))
-    }
-
-    /// Produce a pointer to the data that can be converted back
-    /// to an Arc. This is basically an [`&Arc<T>`][`Arc`], without the extra indirection.
-    /// It has the benefits of an `&T` but also knows about the underlying refcount
-    /// and can be converted into more [`Arc<T>`][`Arc`]s if necessary.
-    #[inline]
-    pub fn borrow_arc(this: &Self) -> ArcBorrow<'_, T> {
-        ArcBorrow {
-            p: this.p,
-            phantom: PhantomData,
-        }
     }
 
     /// Produce a pointer to the data that can be converted back
@@ -155,12 +124,6 @@ impl<T> Arc<T> {
 
         // Forward the result.
         result
-    }
-
-    /// Returns the address on the heap of the [`Arc`] itself -- not the `T` within it -- for memory
-    /// reporting.
-    pub fn heap_ptr(&self) -> *const c_void {
-        self.p.as_ptr() as *const ArcInner<T> as *const c_void
     }
 
     /// Converts an [`Arc`] into a [`OffsetArc`]. This consumes the [`Arc`], so the refcount
@@ -207,6 +170,44 @@ impl<T> Arc<T> {
 }
 
 impl<T: ?Sized> Arc<T> {
+    /// Convert the [`Arc`] to a raw pointer, suitable for use across FFI
+    ///
+    /// Note: This returns a pointer to the data `T`, which is offset in the allocation.
+    ///
+    /// It is recommended to use [`OffsetArc`] for this.
+    #[inline]
+    pub fn into_raw(this: Self) -> *const T {
+        let ptr = Arc::as_ptr(&this);
+        mem::forget(this);
+        ptr
+    }
+
+    /// Returns the raw pointer.
+    ///
+    /// Same as into_raw except `self` isn't consumed.
+    #[inline]
+    pub fn as_ptr(this: &Arc<T>) -> *const T {
+        unsafe { &((*this.ptr()).data) as *const _ }
+    }
+
+    /// Produce a pointer to the data that can be converted back
+    /// to an Arc. This is basically an [`&Arc<T>`][`Arc`], without the extra indirection.
+    /// It has the benefits of an `&T` but also knows about the underlying refcount
+    /// and can be converted into more [`Arc<T>`][`Arc`]s if necessary.
+    #[inline]
+    pub fn borrow_arc(this: &Self) -> ArcBorrow<'_, T> {
+        ArcBorrow {
+            p: this.p,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Returns the address on the heap of the [`Arc`] itself -- not the `T` within it -- for memory
+    /// reporting.
+    pub fn heap_ptr(&self) -> *const c_void {
+        self.p.as_ptr() as *const ArcInner<T> as *const c_void
+    }
+
     /// Transform an [`Arc`] into an allocated [`ArcInner`].
     #[inline]
     pub(crate) fn into_raw_inner(self) -> ptr::NonNull<ArcInner<T>> {
@@ -644,6 +645,21 @@ impl<T: ?Sized> AsRef<T> for Arc<T> {
     }
 }
 
+//TODO: Fixme!
+/*
+unsafe impl<T: ?Sized + Erasable> ErasablePtr for Arc<T> {
+    #[inline]
+    fn erase(this: Self) -> erasable::ErasedPtr {
+        T::erase(unsafe { ptr::NonNull::new_unchecked(Arc::into_raw(this) as *mut _) })
+    }
+
+    #[inline]
+    unsafe fn unerase(this: erasable::ErasedPtr) -> Self {
+        Arc::from_raw(T::unerase(this).as_ptr())
+    }
+}
+*/
+
 #[cfg(feature = "stable_deref_trait")]
 unsafe impl<T: ?Sized> StableDeref for Arc<T> {}
 #[cfg(feature = "stable_deref_trait")]
@@ -709,7 +725,7 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for Arc<T> {
 
 #[cfg(feature = "slice-dst")]
 /// # Safety
-/// 
+///
 /// `ArcInner<S>` is implemented as an additional header before `S`, consisting of the reference count
 unsafe impl<S: SliceDst + ?Sized> SliceDst for ArcInner<S> {
     fn layout_for(len: usize) -> Layout {
@@ -810,7 +826,6 @@ mod tests {
 
     #[test]
     #[cfg(feature = "std")]
-    #[cfg_attr(miri, ignore)]
     fn maybeuninit_array() {
         let mut arc: Arc<[MaybeUninit<_>]> = Arc::new_uninit_slice(5);
         assert!(Arc::is_unique(&arc));
@@ -839,5 +854,16 @@ mod tests {
         drop(arcs);
         assert!(Arc::is_unique(&arc));
         assert_eq!(*arc, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    #[cfg(feature = "slice-dst")]
+    fn slice_with_header() {
+        use slice_dst::SliceWithHeader;
+        let slice = [0, 1, 2, 3, 4, 5];
+        let arc: Arc<SliceWithHeader<u64, u32>> = SliceWithHeader::new(45, slice.iter().copied());
+        let arc2 = SliceWithHeader::from_slice(45, &slice);
+        assert_eq!(arc, arc2);
+        assert_ne!(Arc::as_ptr(&arc), Arc::as_ptr(&arc2));
     }
 }
