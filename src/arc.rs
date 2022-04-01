@@ -15,14 +15,14 @@ use core::slice;
 use core::sync::atomic;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use core::{isize, usize};
-
-#[cfg(feature = "std")]
-use std::alloc::alloc;
+use alloc::alloc::alloc;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "stable_deref_trait")]
 use stable_deref_trait::{CloneStableDeref, StableDeref};
+#[cfg(feature = "slice-dst")]
+use slice_dst::{SliceDst, TryAllocSliceDst};
 
 use crate::{abort, ArcBorrow, ArcBox, OffsetArc, OffsetArcBorrow};
 
@@ -212,7 +212,7 @@ impl<T: ?Sized> Arc<T> {
     #[inline]
     pub(crate) fn into_raw_inner(self) -> ptr::NonNull<ArcInner<T>> {
         let p = self.p;
-        std::mem::forget(self);
+        core::mem::forget(self);
         p
     }
 
@@ -299,7 +299,6 @@ impl<T> Arc<MaybeUninit<T>> {
     }
 }
 
-#[cfg(feature = "std")]
 impl<T> Arc<[MaybeUninit<T>]> {
     /// Create an [`Arc`] contains an array `[MaybeUninit<T>]` of `len`.
     pub fn new_uninit_slice(len: usize) -> Self {
@@ -673,13 +672,14 @@ impl<T: Serialize> Serialize for Arc<T> {
     }
 }
 
-// Safety:
-// This implementation must guarantee that it is sound to call replace_ptr with an unsized variant
-// of the pointer retuned in `as_sized_ptr`. The basic property of Unsize coercion is that safety
-// variants and layout is unaffected. The Arc does not rely on any other property of T. This makes
-// any unsized ArcInner valid for being shared with the sized variant.
-// This does _not_ mean that any T can be unsized into an U, but rather than if such unsizing is
-// possible then it can be propagated into the Arc<T>.
+/// # Safety
+/// 
+/// This implementation must guarantee that it is sound to call replace_ptr with an unsized variant
+/// of the pointer retuned in `as_sized_ptr`. The basic property of Unsize coercion is that safety
+/// variants and layout is unaffected. The Arc does not rely on any other property of T. This makes
+/// any unsized ArcInner valid for being shared with the sized variant.
+/// This does _not_ mean that any T can be unsized into an U, but rather than if such unsizing is
+/// possible then it can be propagated into the Arc<T>.
 #[cfg(feature = "unsize")]
 unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for Arc<T> {
     type Pointee = T;

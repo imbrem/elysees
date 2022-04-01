@@ -209,7 +209,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     pub(crate) fn into_raw_inner(self) -> (NonNull<ArcInner<T>>, bool) {
         let p = self.nn_ptr();
         let o = ArcRef::is_owned(&self);
-        std::mem::forget(self);
+        core::mem::forget(self);
         (p, o)
     }
 

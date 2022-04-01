@@ -7,7 +7,12 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::AtomicUsize;
 
-use super::{Arc, ArcRef, ArcInner};
+use crate::ArcBorrow;
+
+use super::{Arc, ArcInner, ArcRef};
+
+#[cfg(feature = "slice-dst")]
+use slice_dst::{AllocSliceDst, SliceDst, TryAllocSliceDst};
 
 /// An [`Arc`] that is known to be uniquely owned
 ///
@@ -194,11 +199,11 @@ impl<T: ?Sized> AsMut<T> for ArcBox<T> {
     }
 }
 
-// Safety:
-// This leverages the correctness of Arc's CoerciblePtr impl. Additionally, we must ensure that
-// this can not be used to violate the safety invariants of ArcBox, which require that we can not
-// duplicate the Arc, such that replace_ptr returns a valid instance. This holds since it consumes
-// a unique owner of the contained ArcInner.
+/// # Safety
+/// This leverages the correctness of Arc's CoerciblePtr impl. Additionally, we must ensure that
+/// this can not be used to violate the safety invariants of ArcBox, which require that we can not
+/// duplicate the Arc, such that replace_ptr returns a valid instance. This holds since it consumes
+/// a unique owner of the contained ArcInner.
 #[cfg(feature = "unsize")]
 unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for ArcBox<T> {
     type Pointee = T;
@@ -215,6 +220,26 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for ArcBox<T> {
         ArcBox(ptr::read(&inner.0).replace_ptr(new))
     }
 }
+
+// /// This implementation is based on that in the [documentation for `slice-dst`](https://docs.rs/slice-dst/latest/slice_dst/trait.AllocSliceDst.html).
+// ///
+// /// # Safety
+// ///
+// /// This function merely calls `try_new_slice` with an initializer statically guaranteed never to fail, and therefore is safe if and only if
+// /// `try_new_slice` is.
+// unsafe impl<S: ?Sized + SliceDst> AllocSliceDst<S> for ArcBox<S> {
+//     unsafe fn new_slice_dst<I>(len: usize, init: I) -> Self
+//     where
+//         I: FnOnce(ptr::NonNull<S>),
+//     {
+//         #[allow(clippy::unit_arg)]
+//         let init = |ptr| Ok::<(), core::convert::Infallible>(init(ptr));
+//         match Self::try_new_slice_dst(len, init) {
+//             Ok(a) => a,
+//             Err(void) => match void {},
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
