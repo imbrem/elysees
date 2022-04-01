@@ -7,8 +7,6 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::AtomicUsize;
 
-use crate::ArcBorrow;
-
 use super::{Arc, ArcInner, ArcRef};
 
 #[cfg(feature = "slice-dst")]
@@ -221,25 +219,73 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for ArcBox<T> {
     }
 }
 
-// /// This implementation is based on that in the [documentation for `slice-dst`](https://docs.rs/slice-dst/latest/slice_dst/trait.AllocSliceDst.html).
-// ///
-// /// # Safety
-// ///
-// /// This function merely calls `try_new_slice` with an initializer statically guaranteed never to fail, and therefore is safe if and only if
-// /// `try_new_slice` is.
-// unsafe impl<S: ?Sized + SliceDst> AllocSliceDst<S> for ArcBox<S> {
-//     unsafe fn new_slice_dst<I>(len: usize, init: I) -> Self
-//     where
-//         I: FnOnce(ptr::NonNull<S>),
-//     {
-//         #[allow(clippy::unit_arg)]
-//         let init = |ptr| Ok::<(), core::convert::Infallible>(init(ptr));
-//         match Self::try_new_slice_dst(len, init) {
-//             Ok(a) => a,
-//             Err(void) => match void {},
-//         }
-//     }
-// }
+/// This implementation is based on that in the [documentation for `slice-dst`](https://docs.rs/slice-dst/latest/slice_dst/trait.AllocSliceDst.html).
+///
+/// # Safety
+///
+/// This function merely calls `try_new_slice` with an initializer statically guaranteed never to fail, and therefore is safe if and only if
+/// `try_new_slice` is.
+unsafe impl<S: ?Sized + SliceDst> AllocSliceDst<S> for ArcBox<S> {
+    unsafe fn new_slice_dst<I>(len: usize, init: I) -> Self
+    where
+        I: FnOnce(ptr::NonNull<S>),
+    {
+        #[allow(clippy::unit_arg)]
+        let init = |ptr| Ok::<(), core::convert::Infallible>(init(ptr));
+        match Self::try_new_slice_dst(len, init) {
+            Ok(a) => a,
+            Err(void) => match void {},
+        }
+    }
+}
+
+#[cfg(feature = "slice-dst")]
+/// # Safety
+///
+/// 
+unsafe impl<S: ?Sized + SliceDst> TryAllocSliceDst<S> for ArcBox<S> {
+    unsafe fn try_new_slice_dst<I, E>(len: usize, init: I) -> Result<Self, E>
+    where
+        I: FnOnce(ptr::NonNull<S>) -> Result<(), E>,
+    {
+        // Get the offset for the `S` field in an `ArcInner<S>`:
+        let s_layout = S::layout_for(len);
+        let (unpadded_layout, offset) = Layout::new::<AtomicUsize>().extend(s_layout).unwrap();
+
+        // Get an allocation for an `ArcInner<S>`
+        let ptr: NonNull<ArcInner<S>> = slice_dst::alloc_slice_dst(len);
+
+        // Safety: Since this pointer is to the beginning of the allocation, we can initialize the counter through it...
+        ptr.cast::<AtomicUsize>()
+            .as_ptr()
+            .write(AtomicUsize::new(1));
+
+        // Safety: the offset `offset` is in bounds of the allocation `ptr`
+        let s_data_ptr = ptr.cast::<u8>().as_ptr().add(offset) as *mut ();
+
+        // Safety: we can construct `NonNull<[()]>` with length `len` and ptr `ptr`
+        let s_slice_ptr: NonNull<[()]> =
+            NonNull::new_unchecked(core::ptr::slice_from_raw_parts_mut(s_data_ptr, len));
+        let s_ptr = S::retype(s_slice_ptr);
+
+        match init(s_ptr) {
+            Ok(()) => {
+                // Yay! Everything was initialized! Do a few checks for good measure.
+                debug_assert_eq!(Layout::for_value(&*s_ptr.as_ptr()), s_layout);
+                let layout = unpadded_layout.pad_to_align();
+                debug_assert_eq!(Layout::for_value(&*ptr.as_ptr()), layout);
+            }
+            Err(err) => {
+                // Deallocate ptr and return an error
+                let layout = unpadded_layout.pad_to_align();
+                alloc::alloc::dealloc(ptr.as_ptr() as *mut u8, layout);
+                return Err(err);
+            }
+        }
+
+        Ok(ArcBox(Arc::from_raw_inner(ptr)))
+    }
+}
 
 #[cfg(test)]
 mod tests {

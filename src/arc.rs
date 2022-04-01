@@ -1,3 +1,4 @@
+use alloc::alloc::alloc;
 use alloc::boxed::Box;
 use core::alloc::Layout;
 use core::borrow;
@@ -11,18 +12,16 @@ use core::mem;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Deref;
 use core::ptr;
-use core::slice;
 use core::sync::atomic;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use core::{isize, usize};
-use alloc::alloc::alloc;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "slice-dst")]
+use slice_dst::{SliceDst, AllocSliceDst, TryAllocSliceDst};
 #[cfg(feature = "stable_deref_trait")]
 use stable_deref_trait::{CloneStableDeref, StableDeref};
-#[cfg(feature = "slice-dst")]
-use slice_dst::{SliceDst, TryAllocSliceDst};
 
 use crate::{abort, ArcBorrow, ArcBox, OffsetArc, OffsetArcBorrow};
 
@@ -134,7 +133,7 @@ impl<T> Arc<T> {
     pub fn borrow_offset_arc(this: &Self) -> OffsetArcBorrow<'_, T> {
         OffsetArcBorrow {
             p: unsafe { ptr::NonNull::new_unchecked(Arc::as_ptr(this) as *mut T) },
-            phantom: PhantomData
+            phantom: PhantomData,
         }
     }
 
@@ -312,12 +311,12 @@ impl<T> Arc<[MaybeUninit<T>]> {
         // Allocate and initialize ArcInner
         let ptr = unsafe {
             let ptr = alloc(layout);
-            let slice = slice::from_raw_parts(ptr, len);
+            let slice = ptr::slice_from_raw_parts_mut(ptr as *mut MaybeUninit<T>, len);
 
-            let ptr = mem::transmute::<_, *mut ArcInnerUninit<[MaybeUninit<T>]>>(slice);
+            let ptr = slice as *const _ as *mut ArcInnerUninit<[MaybeUninit<T>]>;
             (*ptr).count.as_mut_ptr().write(atomic::AtomicUsize::new(1));
 
-            let ptr = mem::transmute::<_, *mut ArcInner<[MaybeUninit<T>]>>(ptr);
+            let ptr = ptr as *mut ArcInner<[MaybeUninit<T>]>;
             debug_assert_eq!(mem::size_of_val(&*ptr), layout.size());
             ptr
         };
@@ -672,15 +671,15 @@ impl<T: Serialize> Serialize for Arc<T> {
     }
 }
 
+#[cfg(feature = "unsize")]
 /// # Safety
-/// 
+///
 /// This implementation must guarantee that it is sound to call replace_ptr with an unsized variant
 /// of the pointer retuned in `as_sized_ptr`. The basic property of Unsize coercion is that safety
 /// variants and layout is unaffected. The Arc does not rely on any other property of T. This makes
 /// any unsized ArcInner valid for being shared with the sized variant.
 /// This does _not_ mean that any T can be unsized into an U, but rather than if such unsizing is
 /// possible then it can be propagated into the Arc<T>.
-#[cfg(feature = "unsize")]
 unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for Arc<T> {
     type Pointee = T;
     type Output = Arc<U>;
@@ -705,6 +704,60 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for Arc<T> {
         Arc::from_raw_inner(ptr::NonNull::new_unchecked(
             p.replace_ptr(new) as *mut ArcInner<U>
         ))
+    }
+}
+
+#[cfg(feature = "slice-dst")]
+/// # Safety
+/// 
+/// `ArcInner<S>` is implemented as an additional header before `S`, consisting of the reference count
+unsafe impl<S: SliceDst + ?Sized> SliceDst for ArcInner<S> {
+    fn layout_for(len: usize) -> Layout {
+        Layout::new::<atomic::AtomicUsize>()
+            .extend(S::layout_for(len))
+            .unwrap()
+            .0
+            .pad_to_align()
+    }
+
+    fn retype(ptr: ptr::NonNull<[()]>) -> ptr::NonNull<Self> {
+        let retype_inner = S::retype(ptr);
+        // Safety: the metadata for `S` is the same as for `ArcInner<S>`, since `ArcInner<S>` has `S` as it's last member.
+        // This is based on the implementation for `triomphe`.
+        let retyped = unsafe { core::ptr::NonNull::new_unchecked(retype_inner.as_ptr() as *mut _) };
+        //TODO: add correctness assertions
+        retyped
+    }
+}
+
+#[cfg(feature = "slice-dst")]
+/// # Safety
+///
+/// This function merely delegates to the [`TryAllocSliceDst`] implementation
+unsafe impl<S: ?Sized + SliceDst> AllocSliceDst<S> for Arc<S> {
+    unsafe fn new_slice_dst<I>(len: usize, init: I) -> Self
+    where
+        I: FnOnce(ptr::NonNull<S>),
+    {
+        #[allow(clippy::unit_arg)]
+        let init = |ptr| Ok::<(), core::convert::Infallible>(init(ptr));
+        match Self::try_new_slice_dst(len, init) {
+            Ok(a) => a,
+            Err(void) => match void {},
+        }
+    }
+}
+
+#[cfg(feature = "slice-dst")]
+/// # Safety
+///
+/// This function merely delegates to the [`ArcBox`] implementation
+unsafe impl<S: ?Sized + SliceDst> TryAllocSliceDst<S> for Arc<S> {
+    unsafe fn try_new_slice_dst<I, E>(len: usize, init: I) -> Result<Self, E>
+    where
+        I: FnOnce(ptr::NonNull<S>) -> Result<(), E>,
+    {
+        Ok(ArcBox::try_new_slice_dst(len, init)?.shareable())
     }
 }
 
