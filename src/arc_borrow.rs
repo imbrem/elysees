@@ -363,7 +363,7 @@ mod test {
 
     #[test]
     fn borrow_count() {
-        let mut borrows = Vec::with_capacity(100);
+        let mut borrows = alloc::vec::Vec::with_capacity(100);
         let x = Arc::new(76);
         let y = Arc::borrow_arc(&x);
         assert_eq!(Arc::count(&x), 1);

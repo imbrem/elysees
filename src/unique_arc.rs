@@ -225,6 +225,7 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for ArcBox<T> {
 ///
 /// This function merely calls `try_new_slice` with an initializer statically guaranteed never to fail, and therefore is safe if and only if
 /// `try_new_slice` is.
+#[cfg(feature = "slice-dst")]
 unsafe impl<S: ?Sized + SliceDst> AllocSliceDst<S> for ArcBox<S> {
     unsafe fn new_slice_dst<I>(len: usize, init: I) -> Self
     where
