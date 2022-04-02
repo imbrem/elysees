@@ -246,7 +246,7 @@ fn basic_arc_ref_usage() {
     ROOTS
         .lock()
         .unwrap()
-        .insert(SyncPtr(ArcBorrow::into_raw(yl) as *const ()));
+        .insert(SyncPtr(ArcBorrow::heap_ptr(yl) as *const ()));
 }
 
 /*
@@ -308,8 +308,6 @@ fn arc_formatting() {
         assert_eq!(format!("{:?}", arc), *name);
         assert_eq!(format!("{}", Arc::borrow_arc(arc)), *name);
         assert_eq!(format!("{:?}", Arc::borrow_arc(arc)), *name);
-        assert_eq!(format!("{}", Arc::borrow_offset_arc(arc)), *name);
-        assert_eq!(format!("{:?}", Arc::borrow_offset_arc(arc)), *name);
         let _ = format!("{:p}", arc);
     }
 }
@@ -338,14 +336,6 @@ fn arc_hash() {
     for arc in map.iter() {
         assert!(!borrow_map.insert(Arc::borrow_arc(arc)));
     }
-
-    let mut borrow_map = HashSet::new();
-    for arc in map.iter() {
-        assert!(borrow_map.insert(Arc::borrow_offset_arc(arc)));
-    }
-    for arc in map.iter() {
-        assert!(!borrow_map.insert(Arc::borrow_offset_arc(arc)));
-    }
 }
 
 #[test]
@@ -353,24 +343,11 @@ fn arc_borrow_cmp() {
     let ints = [645, 6432, 346, 4534];
     for i in ints {
         let x = Arc::new(i);
-        let xo = Arc::into_raw_offset(x.clone());
         for j in ints {
             let y = Arc::new(j);
-            let yo = Arc::into_raw_offset(y.clone());
 
             let xb = Arc::borrow_arc(&x);
             let yb = Arc::borrow_arc(&y);
-            assert_eq!(xb.cmp(&yb), i.cmp(&j));
-            assert_eq!(xb.partial_cmp(&yb), i.partial_cmp(&j));
-            assert_eq!(xb == yb, i == j);
-            assert_eq!(xb != yb, i != j);
-            assert_eq!(xb < yb, i < j);
-            assert_eq!(xb <= yb, i <= j);
-            assert_eq!(xb > yb, i > j);
-            assert_eq!(xb >= yb, i >= j);
-
-            let xb = OffsetArc::borrow_arc(&xo);
-            let yb = OffsetArc::borrow_arc(&yo);
             assert_eq!(xb.cmp(&yb), i.cmp(&j));
             assert_eq!(xb.partial_cmp(&yb), i.partial_cmp(&j));
             assert_eq!(xb == yb, i == j);

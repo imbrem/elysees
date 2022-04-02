@@ -20,12 +20,14 @@
 #![allow(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
+// === Before next release!!! ===
+//TODO: fix documentation
+//TODO: comment all safety
+
 extern crate alloc;
 #[cfg(feature = "std")]
 extern crate core;
 
-#[macro_use]
-extern crate memoffset;
 #[cfg(feature = "arc-swap")]
 extern crate arc_swap;
 #[cfg(feature = "serde")]
@@ -40,13 +42,11 @@ mod arc_borrow;
 mod arc_ref;
 #[cfg(feature = "arc-swap")]
 mod arc_swap_support;
-mod offset_arc;
 mod unique_arc;
 
 pub use arc::*;
 pub use arc_borrow::*;
 pub use arc_ref::*;
-pub use offset_arc::*;
 pub use unique_arc::*;
 
 #[cfg(feature = "std")]

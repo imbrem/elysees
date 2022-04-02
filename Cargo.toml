@@ -14,7 +14,6 @@ std = []
 default = ["serde", "stable_deref_trait", "unsize", "std", "slice-dst", "arc-swap"]
 
 [dependencies]
-memoffset = "0.6"
 erasable = "1.2"
 serde = { version = "1.0", default-features = false, optional = true }
 stable_deref_trait = { version = "1.1.1", default-features = false, optional = true }

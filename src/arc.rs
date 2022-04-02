@@ -1,5 +1,4 @@
 use alloc::alloc::alloc;
-use alloc::boxed::Box;
 use core::alloc::Layout;
 use core::borrow;
 use core::cmp::Ordering;
@@ -24,7 +23,7 @@ use slice_dst::{AllocSliceDst, SliceDst, TryAllocSliceDst};
 #[cfg(feature = "stable_deref_trait")]
 use stable_deref_trait::{CloneStableDeref, StableDeref};
 
-use crate::{abort, ArcBorrow, ArcBox, OffsetArc, OffsetArcBorrow};
+use crate::{abort, ArcBorrow, ArcBox};
 
 /// A soft limit on the amount of references that may be made to an `Arc`.
 ///
@@ -39,10 +38,62 @@ pub struct ArcInner<T: ?Sized> {
     pub(crate) data: T,
 }
 
-#[repr(C)]
-struct ArcInnerUninit<T: ?Sized> {
-    count: MaybeUninit<atomic::AtomicUsize>,
-    data: T,
+impl<T> ArcInner<T> {
+    /// Get the offset of the data pointer from the beginning of the inner pointer
+    #[inline]
+    pub fn data_offset() -> usize {
+        Layout::new::<atomic::AtomicUsize>()
+            .extend(Layout::new::<T>())
+            .unwrap()
+            .1
+    }
+
+    /// Given the inner pointer, get a data pointer
+    ///
+    /// # Safety:
+    /// This must be a pointer to a (potentially uninitialized) `ArcInner`
+    #[inline]
+    pub unsafe fn data_ptr(this: *mut ArcInner<T>) -> *mut T {
+        let ptr = (this as *mut u8).add(Self::data_offset()) as *mut _;
+        debug_assert_eq!(ArcInner::from_data(ptr), this);
+        ptr
+    }
+
+    /// Given a data pointer, get the inner pointer
+    ///
+    /// # Safety:
+    /// This must be a pointer to the `data` field of a (potentially uninitialized) `ArcInner` with pointer provenance consisting of the entire `ArcInner`
+    #[inline]
+    pub unsafe fn from_data(data: *mut T) -> *mut ArcInner<T> {
+        let ptr = (data as *mut u8).sub(Self::data_offset()) as *mut _;
+        ptr
+    }
+}
+
+impl<T: ?Sized> ArcInner<T> {
+    /// Get the layout of an `ArcInner<T>` given the data, along with the data offset
+    #[inline]
+    pub fn layout(data: &T) -> (Layout, usize) {
+        let (unpadded_layout, data_offset) = Layout::new::<atomic::AtomicUsize>()
+            .extend(Layout::for_value(data))
+            .unwrap();
+        (unpadded_layout.pad_to_align(), data_offset)
+    }
+
+    /// Get the offset of the data pointer from the beginning of the inner pointer, given the data
+    #[inline]
+    pub fn data_offset_value(data: &T) -> usize {
+        Self::layout(data).1
+    }
+
+    /// Given a data pointer, get the count pointer
+    ///
+    /// # Safety:
+    /// This must be a pointer to the `data` field of an initialized `ArcInner` with pointer provenance consisting of the entire `ArcInner`
+    #[inline]
+    pub unsafe fn count_ptr(data: *mut T) -> *mut atomic::AtomicUsize {
+        (data as *mut u8).sub(Self::data_offset_value(&*data)) as *mut _
+    }
 }
 
 unsafe impl<T: ?Sized + Sync + Send> Send for ArcInner<T> {}
@@ -56,7 +107,7 @@ unsafe impl<T: ?Sized + Sync + Send> Sync for ArcInner<T> {}
 /// [aa]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 #[repr(transparent)]
 pub struct Arc<T: ?Sized> {
-    p: ptr::NonNull<ArcInner<T>>,
+    pub(crate) p: ptr::NonNull<T>,
     phantom: PhantomData<T>,
 }
 
@@ -67,84 +118,36 @@ impl<T> Arc<T> {
     /// Construct an [`Arc`]
     #[inline]
     pub fn new(data: T) -> Self {
-        let ptr = Box::into_raw(Box::new(ArcInner {
-            count: atomic::AtomicUsize::new(1),
-            data,
-        }));
-
-        unsafe {
-            Arc {
-                p: ptr::NonNull::new_unchecked(ptr),
-                phantom: PhantomData,
-            }
-        }
-    }
-
-    /// Reconstruct the [`Arc<T>`][`Arc`] from a raw pointer obtained from [`into_raw`][`Arc::into_raw`]
-    ///
-    /// Note: This raw pointer will be offset in the allocation and must be preceded
-    /// by the atomic count.
-    ///
-    /// It is recommended to use [`OffsetArc`] for this
-    #[inline]
-    pub unsafe fn from_raw(ptr: *const T) -> Self {
-        // To find the corresponding pointer to the `ArcInner` we need
-        // to subtract the offset of the `data` field from the pointer.
-        let ptr = (ptr as *const u8).sub(offset_of!(ArcInner<T>, data));
-        Arc::from_raw_inner(ptr::NonNull::new_unchecked(ptr as *mut ArcInner<T>))
-    }
-
-    /// Produce a pointer to the data that can be converted back
-    /// to an Arc. This is basically an [`&Arc<T>`][`Arc`], without the extra indirection.
-    /// It has the benefits of an `&T` but also knows about the underlying refcount
-    /// and can be converted into more [`Arc<T>`][`Arc`]s if necessary.
-    #[inline]
-    pub fn borrow_offset_arc(this: &Self) -> OffsetArcBorrow<'_, T> {
-        OffsetArcBorrow {
-            p: unsafe { ptr::NonNull::new_unchecked(Arc::as_ptr(this) as *mut T) },
-            phantom: PhantomData,
-        }
-    }
-
-    /// Temporarily converts `self` into a bonafide [`OffsetArc`] and exposes it to the
-    /// provided callback. The refcount is not modified.
-    #[inline(always)]
-    pub fn with_raw_offset_arc<F, U>(this: &Self, f: F) -> U
-    where
-        F: FnOnce(&OffsetArc<T>) -> U,
-    {
-        // Synthesize transient Arc, which never touches the refcount of the ArcInner.
-        let transient = unsafe { ManuallyDrop::new(Arc::into_raw_offset(ptr::read(this))) };
-
-        // Expose the transient Arc to the callback, which may clone it if it wants.
-        let result = f(&transient);
-
-        // Forget the transient Arc to leave the refcount untouched.
-        mem::forget(transient);
-
-        // Forward the result.
+        let (layout, _offset) = ArcInner::layout(&data);
+        let result = unsafe {
+            let p = alloc::alloc::alloc(layout) as *mut ArcInner<T>;
+            p.write(ArcInner {
+                count: atomic::AtomicUsize::new(1),
+                data,
+            });
+            Arc::from_raw_inner(ptr::NonNull::new_unchecked(p))
+        };
         result
     }
 
-    /// Converts an [`Arc`] into a [`OffsetArc`]. This consumes the [`Arc`], so the refcount
-    /// is not modified.
+    /// Transform an [`Arc`] into an allocated [`ArcInner`].
     #[inline]
-    pub fn into_raw_offset(a: Self) -> OffsetArc<T> {
-        unsafe {
-            OffsetArc {
-                p: ptr::NonNull::new_unchecked(Arc::into_raw(a) as *mut T),
-                phantom: PhantomData,
-            }
-        }
+    pub(crate) fn into_raw_inner(self) -> ptr::NonNull<ArcInner<T>> {
+        let p = self.p.as_ptr();
+        core::mem::forget(self);
+        unsafe { ptr::NonNull::new_unchecked(ArcInner::from_data(p)) }
     }
 
-    /// Converts a [`OffsetArc`] into an [`Arc`]. This consumes the [`OffsetArc`], so the refcount
-    /// is not modified.
+    /// Construct an [`Arc`] from an allocated [`ArcInner`].
+    /// # Safety
+    /// The `ptr` must point to a valid instance, allocated by an [`Arc`]. The reference count will
+    /// not be modified.
     #[inline]
-    pub fn from_raw_offset(a: OffsetArc<T>) -> Self {
-        let ptr = a.p.as_ptr();
-        mem::forget(a);
-        unsafe { Arc::from_raw(ptr) }
+    pub(crate) unsafe fn from_raw_inner(p: ptr::NonNull<ArcInner<T>>) -> Self {
+        Arc {
+            p: ptr::NonNull::new_unchecked(ArcInner::data_ptr(p.as_ptr())),
+            phantom: PhantomData,
+        }
     }
 
     /// Returns the inner value, if the [`Arc`] has exactly one strong reference.
@@ -170,6 +173,20 @@ impl<T> Arc<T> {
 }
 
 impl<T: ?Sized> Arc<T> {
+    /// Reconstruct the [`Arc<T>`][`Arc`] from a raw pointer obtained from [`into_raw`][`Arc::into_raw`]
+    ///
+    /// Note: This raw pointer will be offset in the allocation and must be preceded
+    /// by the atomic count.
+    ///
+    /// It is recommended to use [`OffsetArc`] for this
+    #[inline]
+    pub unsafe fn from_raw(ptr: *const T) -> Self {
+        Arc {
+            p: ptr::NonNull::new_unchecked(ptr as *mut T),
+            phantom: PhantomData,
+        }
+    }
+
     /// Convert the [`Arc`] to a raw pointer, suitable for use across FFI
     ///
     /// Note: This returns a pointer to the data `T`, which is offset in the allocation.
@@ -187,7 +204,7 @@ impl<T: ?Sized> Arc<T> {
     /// Same as into_raw except `self` isn't consumed.
     #[inline]
     pub fn as_ptr(this: &Arc<T>) -> *const T {
-        unsafe { &((*this.ptr()).data) as *const _ }
+        this.p.as_ptr()
     }
 
     /// Produce a pointer to the data that can be converted back
@@ -205,54 +222,21 @@ impl<T: ?Sized> Arc<T> {
     /// Returns the address on the heap of the [`Arc`] itself -- not the `T` within it -- for memory
     /// reporting.
     pub fn heap_ptr(&self) -> *const c_void {
-        self.p.as_ptr() as *const ArcInner<T> as *const c_void
-    }
-
-    /// Transform an [`Arc`] into an allocated [`ArcInner`].
-    #[inline]
-    pub(crate) fn into_raw_inner(self) -> ptr::NonNull<ArcInner<T>> {
-        let p = self.p;
-        core::mem::forget(self);
-        p
-    }
-
-    /// Construct an [`Arc`] from an allocated [`ArcInner`].
-    /// # Safety
-    /// The `ptr` must point to a valid instance, allocated by an [`Arc`]. The reference count will
-    /// not be modified.
-    #[inline]
-    pub(crate) unsafe fn from_raw_inner(p: ptr::NonNull<ArcInner<T>>) -> Self {
-        Arc {
-            p,
-            phantom: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub(super) fn inner(&self) -> &ArcInner<T> {
-        // This unsafety is ok because while this arc is alive we're guaranteed
-        // that the inner pointer is valid. Furthermore, we know that the
-        // `ArcInner` structure itself is `Sync` because the inner data is
-        // `Sync` as well, so we're ok loaning out an immutable pointer to these
-        // contents.
-        unsafe { &*self.ptr() }
+        unsafe { ArcInner::count_ptr(self.p.as_ptr()) as *const c_void }
     }
 
     // Non-inlined part of [`drop`][`Arc::drop`]. Just invokes the destructor.
     #[inline(never)]
     pub(crate) unsafe fn drop_slow(&mut self) {
-        let _ = Box::from_raw(self.ptr());
+        let (layout, data_offset) = ArcInner::layout(&**self);
+        alloc::alloc::dealloc((self.p.as_ptr() as *mut u8).sub(data_offset), layout)
     }
 
     /// Test pointer equality between the two [`Arc`]s, i.e. they must be the _same_
     /// allocation
     #[inline]
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        this.ptr() == other.ptr()
-    }
-
-    pub(crate) fn ptr(&self) -> *mut ArcInner<T> {
-        self.p.as_ptr()
+        this.p == other.p
     }
 
     /// Leak this [`Arc<T>`][`Arc`], getting an [`ArcBorrow<'static, T>`][`ArcBorrow`]
@@ -279,15 +263,14 @@ impl<T> Arc<MaybeUninit<T>> {
     /// Calls `MaybeUninit::write` on the value contained.
     pub fn write(&mut self, val: T) -> &mut T {
         unsafe {
-            let ptr = (*self.ptr()).data.as_mut_ptr();
-            ptr.write(val);
-            &mut *ptr
+            self.p.as_ptr().write(MaybeUninit::new(val));
+            &mut *self.p.as_mut().as_mut_ptr()
         }
     }
 
     /// Obtain a mutable pointer to the stored `MaybeUninit<T>`.
     pub fn as_mut_ptr(&mut self) -> *mut MaybeUninit<T> {
-        unsafe { &mut (*self.ptr()).data }
+        self.p.as_ptr()
     }
 
     /// # Safety
@@ -295,7 +278,7 @@ impl<T> Arc<MaybeUninit<T>> {
     /// Must initialize all fields before calling this function.
     #[inline]
     pub unsafe fn assume_init(self) -> Arc<T> {
-        Arc::from_raw_inner(self.into_raw_inner().cast())
+        Arc::from_raw(Arc::into_raw(self) as *const T)
     }
 }
 
@@ -306,32 +289,17 @@ impl<T> Arc<[MaybeUninit<T>]> {
         let layout = Layout::new::<atomic::AtomicUsize>();
         let array_layout = Layout::array::<MaybeUninit<T>>(len).unwrap();
 
-        let (layout, _) = layout.extend(array_layout).unwrap();
+        let (layout, offset) = layout.extend(array_layout).unwrap();
         let layout = layout.pad_to_align();
 
         // Allocate and initialize ArcInner
-        let ptr = unsafe {
+        unsafe {
             let ptr = alloc(layout);
-            let slice = ptr::slice_from_raw_parts_mut(ptr as *mut MaybeUninit<T>, len);
-
-            let ptr = slice as *const _ as *mut ArcInnerUninit<[MaybeUninit<T>]>;
-            (*ptr).count.as_mut_ptr().write(atomic::AtomicUsize::new(1));
-
-            let ptr = ptr as *mut ArcInner<[MaybeUninit<T>]>;
-            debug_assert_eq!(mem::size_of_val(&*ptr), layout.size());
-            ptr
-        };
-
-        Arc {
-            p: ptr::NonNull::new(ptr).unwrap(),
-            phantom: PhantomData,
+            (ptr as *mut atomic::AtomicUsize).write(atomic::AtomicUsize::new(1));
+            let slice = ptr::slice_from_raw_parts_mut(ptr.add(offset) as *mut MaybeUninit<T>, len);
+            let result = Arc::from_raw(slice);
+            result
         }
-    }
-
-    /// Obtain a mutable slice to the stored `[MaybeUninit<T>]`.
-    #[inline]
-    pub fn as_mut_slice(&mut self) -> &mut [MaybeUninit<T>] {
-        unsafe { &mut (*self.ptr()).data }
     }
 
     /// # Safety
@@ -339,9 +307,7 @@ impl<T> Arc<[MaybeUninit<T>]> {
     /// Must initialize all fields before calling this function.
     #[inline]
     pub unsafe fn assume_init(self) -> Arc<[T]> {
-        Arc::from_raw_inner(ptr::NonNull::new_unchecked(
-            self.into_raw_inner().as_ptr() as _
-        ))
+        Arc::from_raw(Arc::into_raw(self) as *const [T])
     }
 }
 
@@ -359,7 +325,7 @@ impl<T: ?Sized> Clone for Arc<T> {
         // another must already provide any required synchronization.
         //
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
-        let old_size = self.inner().count.fetch_add(1, Relaxed);
+        let old_size = unsafe { (*ArcInner::count_ptr(self.p.as_ptr())).fetch_add(1, Relaxed) };
 
         // However we need to guard against massive refcounts in case someone
         // is `mem::forget`ing Arcs. If we don't do this the count can overflow
@@ -374,11 +340,9 @@ impl<T: ?Sized> Clone for Arc<T> {
             abort();
         }
 
-        unsafe {
-            Arc {
-                p: ptr::NonNull::new_unchecked(self.ptr()),
-                phantom: PhantomData,
-            }
+        Arc {
+            p: self.p,
+            phantom: PhantomData,
         }
     }
 }
@@ -388,7 +352,7 @@ impl<T: ?Sized> Deref for Arc<T> {
 
     #[inline]
     fn deref(&self) -> &T {
-        &self.inner().data
+        unsafe { self.p.as_ref() }
     }
 }
 
@@ -412,6 +376,7 @@ impl<T: Clone + ?Sized> Arc<T> {
             // Another pointer exists; clone
             *this = Arc::new((**this).clone());
         }
+        debug_assert!(Self::is_unique(this));
 
         unsafe {
             // This unsafety is ok because we're guaranteed that the pointer
@@ -419,7 +384,7 @@ impl<T: Clone + ?Sized> Arc<T> {
             // reference count is guaranteed to be 1 at this point, and we required
             // the Arc itself to be `mut`, so we're returning the only possible
             // reference to the inner data.
-            &mut (*this.ptr()).data
+            this.p.as_mut()
         }
     }
 }
@@ -431,7 +396,7 @@ impl<T: ?Sized> Arc<T> {
         if Self::is_unique(this) {
             unsafe {
                 // See make_mut() for documentation of the threadsafety here.
-                Some(&mut (*this.ptr()).data)
+                Some(this.p.as_mut())
             }
         } else {
             None
@@ -444,7 +409,8 @@ impl<T: ?Sized> Arc<T> {
         // See the extensive discussion in [1] for why this needs to be Acquire.
         //
         // [1] https://github.com/servo/servo/issues/21186
-        Self::count(this) == 1
+        let u = Self::count(this) == 1;
+        u
     }
 
     /// Gets the number of [`Arc`] pointers to this allocation
@@ -456,7 +422,7 @@ impl<T: ?Sized> Arc<T> {
     /// Gets the number of [`Arc`] pointers to this allocation, with a given load ordering
     #[inline]
     pub fn load_count(this: &Self, order: atomic::Ordering) -> usize {
-        this.inner().count.load(order)
+        unsafe { (*ArcInner::count_ptr(this.p.as_ptr())).load(order) }
     }
 
     /// Returns an [`ArcBox`] if the [`Arc`] has exactly one strong reference.
@@ -509,7 +475,7 @@ impl<T: ?Sized> Drop for Arc<T> {
     fn drop(&mut self) {
         // Because `fetch_sub` is already atomic, we do not need to synchronize
         // with other threads unless we are going to delete the object.
-        if self.inner().count.fetch_sub(1, Release) != 1 {
+        if unsafe { (*ArcInner::count_ptr(self.p.as_ptr())).fetch_sub(1, Release) != 1 } {
             return;
         }
 
@@ -533,7 +499,7 @@ impl<T: ?Sized> Drop for Arc<T> {
         //
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
         // [2]: https://github.com/rust-lang/rust/pull/41714
-        self.inner().count.load(Acquire);
+        unsafe { (*ArcInner::count_ptr(self.p.as_ptr())).load(Acquire) };
 
         unsafe {
             self.drop_slow();
@@ -603,17 +569,18 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for Arc<T> {
     }
 }
 
-impl<T> fmt::Pointer for Arc<T> {
+impl<T: ?Sized> fmt::Pointer for Arc<T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Pointer::fmt(&self.ptr(), f)
+        fmt::Pointer::fmt(&self.p, f)
     }
 }
 
 impl<T: Default> Default for Arc<T> {
     #[inline]
     fn default() -> Arc<T> {
-        Arc::new(Default::default())
+        let d = Arc::new(Default::default());
+        d
     }
 }
 
@@ -645,8 +612,6 @@ impl<T: ?Sized> AsRef<T> for Arc<T> {
     }
 }
 
-//TODO: Fixme!
-/*
 unsafe impl<T: ?Sized + Erasable> ErasablePtr for Arc<T> {
     #[inline]
     fn erase(this: Self) -> erasable::ErasedPtr {
@@ -658,7 +623,6 @@ unsafe impl<T: ?Sized + Erasable> ErasablePtr for Arc<T> {
         Arc::from_raw(T::unerase(this).as_ptr())
     }
 }
-*/
 
 #[cfg(feature = "stable_deref_trait")]
 unsafe impl<T: ?Sized> StableDeref for Arc<T> {}
@@ -703,23 +667,18 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for Arc<T> {
     fn as_sized_ptr(&mut self) -> *mut T {
         // Returns a pointer to the complete inner. The unsizing itself won't care about the
         // pointer value and promises not to offset it.
-        self.p.as_ptr() as *mut T
+        self.p.as_ptr()
     }
 
     unsafe fn replace_ptr(self, new: *mut U) -> Arc<U> {
         // Fix the provenance by ensuring that of `self` is used.
+        let old_layout = ArcInner::layout(&*self);
         let inner = ManuallyDrop::new(self);
         let p = inner.p.as_ptr() as *mut T;
-        // Safety: This points to an ArcInner of the previous self and holds shared ownership since
-        // the old pointer never decremented the reference count. The caller upholds that `new` is
-        // an unsized version of the previous ArcInner. This assumes that unsizing to the fat
-        // pointer tag of an `ArcInner<U>` and `U` is isomorphic under a direct pointer cast since
-        // in reality we unsized *mut T to *mut U at the address of the ArcInner. This is the case
-        // for all currently envisioned unsized types where the tag of T and ArcInner<T> are simply
-        // the same.
-        Arc::from_raw_inner(ptr::NonNull::new_unchecked(
-            p.replace_ptr(new) as *mut ArcInner<U>
-        ))
+        // Safety: The caller upholds that `new` is an unsized version of the data in the previous ArcInner.
+        let result = Arc::from_raw(p.replace_ptr(new) as *mut U);
+        debug_assert_eq!(old_layout, ArcInner::layout(&*result));
+        result
     }
 }
 
@@ -810,8 +769,14 @@ mod tests {
     #[test]
     #[cfg(feature = "unsize")]
     fn coerce_to_dyn() {
+        use crate::ArcInner;
+
         let x: Arc<_> = Arc::new(|| 42u32);
+        let old_layout = ArcInner::layout(&*x);
+        assert_eq!((*x)(), 42);
         let x: Arc<_> = x.unsize(Coercion::<_, dyn Fn() -> u32>::to_fn());
+        let new_layout = ArcInner::layout(&*x);
+        assert_eq!(old_layout, new_layout);
         assert_eq!((*x)(), 42);
     }
 
@@ -827,9 +792,9 @@ mod tests {
     #[test]
     #[cfg(feature = "std")]
     fn maybeuninit_array() {
-        let mut arc: Arc<[MaybeUninit<_>]> = Arc::new_uninit_slice(5);
+        let mut arc: Arc<[MaybeUninit<usize>]> = Arc::new_uninit_slice(5);
         assert!(Arc::is_unique(&arc));
-        for (uninit, index) in arc.as_mut_slice().iter_mut().zip(0..5) {
+        for (uninit, index) in Arc::get_mut(&mut arc).unwrap().iter_mut().zip(0..5) {
             let ptr = uninit.as_mut_ptr();
             unsafe { core::ptr::write(ptr, index) };
         }

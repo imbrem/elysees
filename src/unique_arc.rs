@@ -72,7 +72,7 @@ impl<T> ArcBox<T> {
         // Safety: We have exclusive access to the inner data and the
         //         arc will not perform its drop routine since we've
         //         wrapped it in a `ManuallyDrop`
-        unsafe { Box::from_raw(this.ptr()).data }
+        unsafe { Box::from_raw(ArcInner::from_data(this.p.as_ptr())).data }
     }
 
     /// Convert to a shareable [`ArcRef<'static, T>`] once we're done mutating it
@@ -138,7 +138,7 @@ impl<T: ?Sized> DerefMut for ArcBox<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut T {
         // We know this to be uniquely owned
-        unsafe { &mut (*self.0.ptr()).data }
+        unsafe { self.0.p.as_mut() }
     }
 }
 
@@ -243,7 +243,7 @@ unsafe impl<S: ?Sized + SliceDst> AllocSliceDst<S> for ArcBox<S> {
 #[cfg(feature = "slice-dst")]
 /// # Safety
 ///
-/// 
+///
 unsafe impl<S: ?Sized + SliceDst> TryAllocSliceDst<S> for ArcBox<S> {
     unsafe fn try_new_slice_dst<I, E>(len: usize, init: I) -> Result<Self, E>
     where
@@ -284,7 +284,7 @@ unsafe impl<S: ?Sized + SliceDst> TryAllocSliceDst<S> for ArcBox<S> {
             }
         }
 
-        Ok(ArcBox(Arc::from_raw_inner(ptr)))
+        Ok(ArcBox(Arc::from_raw(s_ptr.as_ptr())))
     }
 }
 

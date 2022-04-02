@@ -32,7 +32,8 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     /// Construct an [`ArcRef<'a, T>`]
     #[inline]
     pub fn new(data: T) -> Self {
-        ArcRef::from_arc(Arc::new(data))
+        let new = ArcRef::from_arc(Arc::new(data));
+        new
     }
 
     /// Returns the inner value, if the [`ArcRef`] is owned and has exactly one strong reference.
@@ -89,7 +90,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
             // reference count is guaranteed to be 1 at this point, and we required
             // the Arc itself to be `mut`, so we're returning the only possible
             // reference to the inner data.
-            &mut (*this.ptr()).data
+            &mut *this.ptr()
         }
     }
 
@@ -99,7 +100,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         if Self::is_unique(this) {
             unsafe {
                 // See make_mut() for documentation of the threadsafety here.
-                Some(&mut (*this.ptr()).data)
+                Some(&mut *this.ptr())
             }
         } else {
             None
@@ -124,7 +125,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     /// Gets the number of [`Arc`] pointers to this allocation, with a given load ordering
     #[inline]
     pub fn load_count(this: &Self, order: atomic::Ordering) -> usize {
-        this.inner().count.load(order)
+        unsafe { (*ArcInner::count_ptr(this.ptr())).load(order) }
     }
 
     /// Returns an [`ArcBox`] if the [`ArcRef`] has exactly one strong, owned reference.
@@ -152,11 +153,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         if ArcRef::is_unique(&this) {
             // Safety: The current arc is unique and making a `ArcBox`
             //         from it is sound
-            unsafe {
-                Ok(ArcBox::from_arc(Arc::from_raw_inner(
-                    ArcRef::into_raw_inner(this).0,
-                )))
-            }
+            unsafe { Ok(ArcBox::from_arc(Arc::from_raw(ArcRef::into_raw(this)))) }
         } else {
             Err(this)
         }
@@ -175,13 +172,13 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     /// ```
     #[inline]
     pub fn from_arc(arc: Arc<T>) -> Self {
-        unsafe { Self::from_raw_inner(arc.into_raw_inner(), true) }
+        unsafe { Self::from_raw(Arc::into_raw(arc), true) }
     }
 
     /// Construct an `ArcRef<'a, T>` from an `ArcBorrow<'a, T>`
     #[inline]
     pub fn from_borrow(arc: ArcBorrow<'a, T>) -> Self {
-        unsafe { Self::from_raw_inner(arc.p, false) }
+        unsafe { Self::from_raw(arc.p.as_ptr(), false) }
     }
 
     /// Try to convert this `ArcRef<'a, T>` into an `Arc<T>` if owned; otherwise, return it as an `ArcBorrow`
@@ -196,7 +193,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     #[inline]
     pub fn try_into_arc(this: Self) -> Result<Arc<T>, ArcBorrow<'a, T>> {
         match this.into_raw_inner() {
-            (p, true) => Ok(unsafe { Arc::from_raw_inner(p) }),
+            (p, true) => Ok(unsafe { Arc::from_raw(p.as_ptr()) }),
             (p, false) => Err(ArcBorrow {
                 p,
                 phantom: PhantomData,
@@ -206,7 +203,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
 
     /// Transform an [`ArcRef`] into an allocated [`ArcInner`] and ownership count.
     #[inline]
-    pub(crate) fn into_raw_inner(self) -> (NonNull<ArcInner<T>>, bool) {
+    pub(crate) fn into_raw_inner(self) -> (NonNull<T>, bool) {
         let p = self.nn_ptr();
         let o = ArcRef::is_owned(&self);
         core::mem::forget(self);
@@ -218,23 +215,17 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     /// The `ptr` must point to a valid instance, allocated by an [`Arc`]. The reference count will
     /// not be modified.
     #[inline]
-    pub(crate) unsafe fn from_raw_inner(p: NonNull<ArcInner<T>>, o: bool) -> Self {
-        ArcRef {
+    pub(crate) unsafe fn from_raw(p: *const T, o: bool) -> Self {
+        //TODO: replace with ptr_union...
+        let result = ArcRef {
             p: Erasable::erase(NonNull::new_unchecked(
-                (Erasable::erase(p).as_ptr() as usize | if o { 0b10 } else { 0b00 }) as *mut u8,
+                (Erasable::erase(NonNull::new_unchecked(p as *mut T)).as_ptr() as usize
+                    | if o { 0b10 } else { 0b00 }) as *mut u8,
             )),
             phantom: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn inner(&self) -> &ArcInner<T> {
-        // This unsafety is ok because while this arc is alive we're guaranteed
-        // that the inner pointer is valid. Furthermore, we know that the
-        // `ArcInner` structure itself is `Sync` because the inner data is
-        // `Sync` as well, so we're ok loaning out an immutable pointer to these
-        // contents.
-        unsafe { &*self.ptr() }
+        };
+        debug_assert_eq!(ArcRef::is_owned(&result), o);
+        result
     }
 
     /// Test pointer equality between the two [`ArcRef`]s, i.e. they must be the _same_
@@ -245,14 +236,14 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     }
 
     #[inline]
-    pub(crate) fn nn_ptr(&self) -> NonNull<ArcInner<T>> {
+    pub(crate) fn nn_ptr(&self) -> NonNull<T> {
         let buf_ptr = (self.p.as_ptr() as usize & !0b11) as *mut u8;
         let erased = unsafe { Erasable::erase(NonNull::new_unchecked(buf_ptr)) };
         unsafe { Erasable::unerase(erased) }
     }
 
     #[inline]
-    pub(crate) fn ptr(&self) -> *mut ArcInner<T> {
+    pub(crate) fn ptr(&self) -> *mut T {
         self.nn_ptr().as_ptr()
     }
 
@@ -464,7 +455,7 @@ impl<'a, T: Erasable> Drop for ArcRef<'a, T> {
     #[inline]
     fn drop(&mut self) {
         if ArcRef::is_owned(self) {
-            core::mem::drop(unsafe { Arc::from_raw_inner(self.nn_ptr()) })
+            core::mem::drop(unsafe { Arc::from_raw(self.ptr()) })
         }
     }
 }
@@ -488,7 +479,7 @@ impl<'a, T: Erasable> Deref for ArcRef<'a, T> {
 
     #[inline]
     fn deref(&self) -> &T {
-        &self.inner().data
+        unsafe { &*self.ptr() }
     }
 }
 
@@ -554,7 +545,8 @@ impl<'a, T: Erasable> fmt::Pointer for ArcRef<'a, T> {
 impl<'a, T: Erasable + Default> Default for ArcRef<'a, T> {
     #[inline]
     fn default() -> ArcRef<'a, T> {
-        ArcRef::new(Default::default())
+        let d = ArcRef::new(Default::default());
+        d
     }
 }
 

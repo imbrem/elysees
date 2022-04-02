@@ -21,7 +21,6 @@ dependencies = [
  "arc-swap",
  "erasable",
  "lazy_static",
- "memoffset",
  "serde",
  "slice-dst",
  "stable_deref_trait",
@@ -43,15 +42,6 @@ name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
-
-[[package]]
-name = "memoffset"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "157b4208e3059a8f9e78d559edc658e13df41410cb3ae03979c83130067fdd87"
-dependencies = [
- "autocfg",
-]
 
 [[package]]
 name = "scopeguard"
