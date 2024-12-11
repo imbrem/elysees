@@ -18,10 +18,6 @@
 #![allow(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-// === Before next release!!! ===
-//TODO: fix documentation
-//TODO: comment all safety
-
 extern crate alloc;
 #[cfg(feature = "std")]
 extern crate core;
