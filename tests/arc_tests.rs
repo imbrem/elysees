@@ -1,20 +1,17 @@
 use elysees::*;
-use lazy_static::lazy_static;
 use std::borrow::BorrowMut;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Mutex;
 
-#[derive(Debug, Eq, PartialEq, Hash)]
-struct SyncPtr(*const ());
-
-unsafe impl Send for SyncPtr {}
-unsafe impl Sync for SyncPtr {}
-
-lazy_static! {
-    /// Set of roots for MIRI to treat as always reachable, to avoid memory leak errors
-    static ref ROOTS: Mutex<HashSet<SyncPtr>> = Mutex::new(HashSet::new());
+#[cfg(miri)]
+extern "Rust" {
+    /// Miri-provided extern function to mark the block `ptr` points to as a "root"
+    /// for some static memory. This memory and everything reachable by it is not
+    /// considered leaking even if it still exists when the program terminates.
+    ///
+    /// `ptr` has to point to the beginning of an allocated block.
+    fn miri_static_root(ptr: *const u8);
 }
 
 #[test]
@@ -125,10 +122,8 @@ fn basic_arc_usage() {
     assert_eq!(Arc::as_ptr(&box_unique), Arc::as_ptr(&not_unique));
 
     // Avoid memory leak error for yl
-    ROOTS
-        .lock()
-        .unwrap()
-        .insert(SyncPtr(ArcBorrow::into_raw(yl) as *const ()));
+    #[cfg(miri)]
+    unsafe { miri_static_root(ArcBorrow::heap_ptr(yl) as *const u8); }
 }
 
 #[test]
@@ -243,10 +238,8 @@ fn basic_arc_ref_usage() {
     assert_eq!(ArcRef::as_ptr(&box_unique), ArcRef::as_ptr(&not_unique));
 
     // Avoid memory leak error for yl
-    ROOTS
-        .lock()
-        .unwrap()
-        .insert(SyncPtr(ArcBorrow::heap_ptr(yl) as *const ()));
+    #[cfg(miri)]
+    unsafe { miri_static_root(ArcBorrow::heap_ptr(yl) as *const u8); }
 }
 
 /*

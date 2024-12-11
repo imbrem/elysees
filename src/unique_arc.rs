@@ -130,6 +130,7 @@ impl<T: ?Sized> Deref for ArcBox<T> {
 
     #[inline]
     fn deref(&self) -> &T {
+        #[allow(clippy::explicit_auto_deref)]
         &*self.0
     }
 }
@@ -172,28 +173,28 @@ impl<T: Display> Display for ArcBox<T> {
 impl<T: ?Sized> Borrow<T> for ArcBox<T> {
     #[inline]
     fn borrow(&self) -> &T {
-        &**self
+        self
     }
 }
 
 impl<T: ?Sized> AsRef<T> for ArcBox<T> {
     #[inline]
     fn as_ref(&self) -> &T {
-        &**self
+        self
     }
 }
 
 impl<T: ?Sized> BorrowMut<T> for ArcBox<T> {
     #[inline]
     fn borrow_mut(&mut self) -> &mut T {
-        &mut **self
+        self
     }
 }
 
 impl<T: ?Sized> AsMut<T> for ArcBox<T> {
     #[inline]
     fn as_mut(&mut self) -> &mut T {
-        &mut **self
+        self
     }
 }
 
@@ -233,6 +234,7 @@ unsafe impl<S: ?Sized + SliceDst> AllocSliceDst<S> for ArcBox<S> {
     {
         #[allow(clippy::unit_arg)]
         let init = |ptr| Ok::<(), core::convert::Infallible>(init(ptr));
+        #[allow(unreachable_patterns)]
         match Self::try_new_slice_dst(len, init) {
             Ok(a) => a,
             Err(void) => match void {},

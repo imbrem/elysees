@@ -1,6 +1,6 @@
 [package]
 name = "elysees"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Jad Elkhaleq Ghalayini", "The Servo Project Developers"]
 license = "MIT OR Apache-2.0"
 repository = "https://gitlab.com/tekne/elysees"
@@ -20,6 +20,3 @@ stable_deref_trait = { version = "1.1.1", default-features = false, optional = t
 unsize = { version = "1.1", optional = true }
 arc-swap = { version = "1.5", optional = true }
 slice-dst = { version = "1.5", optional = true }
-
-[dev-dependencies]
-lazy_static = "^1.4"

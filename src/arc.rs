@@ -13,7 +13,6 @@ use core::ops::Deref;
 use core::ptr;
 use core::sync::atomic;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use core::{isize, usize};
 use erasable::{Erasable, ErasablePtr};
 
 #[cfg(feature = "serde")]
@@ -50,7 +49,7 @@ impl<T> ArcInner<T> {
 
     /// Given the inner pointer, get a data pointer
     ///
-    /// # Safety:
+    /// # Safety
     /// This must be a pointer to a (potentially uninitialized) `ArcInner`
     #[inline]
     pub unsafe fn data_ptr(this: *mut ArcInner<T>) -> *mut T {
@@ -61,12 +60,12 @@ impl<T> ArcInner<T> {
 
     /// Given a data pointer, get the inner pointer
     ///
-    /// # Safety:
-    /// This must be a pointer to the `data` field of a (potentially uninitialized) `ArcInner` with pointer provenance consisting of the entire `ArcInner`
+    /// # Safety
+    /// This must be a pointer to the `data` field of a (potentially uninitialized) `ArcInner` with
+    /// pointer provenance consisting of the entire `ArcInner`
     #[inline]
     pub unsafe fn from_data(data: *mut T) -> *mut ArcInner<T> {
-        let ptr = (data as *mut u8).sub(Self::data_offset()) as *mut _;
-        ptr
+        (data as *mut u8).sub(Self::data_offset()) as *mut _
     }
 }
 
@@ -88,8 +87,9 @@ impl<T: ?Sized> ArcInner<T> {
 
     /// Given a data pointer, get the count pointer
     ///
-    /// # Safety:
-    /// This must be a pointer to the `data` field of an initialized `ArcInner` with pointer provenance consisting of the entire `ArcInner`
+    /// # Safety
+    /// This must be a pointer to the `data` field of an initialized `ArcInner` with pointer
+    /// provenance consisting of the entire `ArcInner`
     #[inline]
     pub unsafe fn count_ptr(data: *mut T) -> *mut atomic::AtomicUsize {
         (data as *mut u8).sub(Self::data_offset_value(&*data)) as *mut _
@@ -119,15 +119,14 @@ impl<T> Arc<T> {
     #[inline]
     pub fn new(data: T) -> Self {
         let (layout, _offset) = ArcInner::layout(&data);
-        let result = unsafe {
+        unsafe {
             let p = alloc::alloc::alloc(layout) as *mut ArcInner<T>;
             p.write(ArcInner {
                 count: atomic::AtomicUsize::new(1),
                 data,
             });
             Arc::from_raw_inner(ptr::NonNull::new_unchecked(p))
-        };
-        result
+        }
     }
 
     /// Transform an [`Arc`] into an allocated [`ArcInner`].
@@ -175,10 +174,8 @@ impl<T> Arc<T> {
 impl<T: ?Sized> Arc<T> {
     /// Reconstruct the [`Arc<T>`][`Arc`] from a raw pointer obtained from [`into_raw`][`Arc::into_raw`]
     ///
-    /// Note: This raw pointer will be offset in the allocation and must be preceded
-    /// by the atomic count.
-    ///
-    /// It is recommended to use [`OffsetArc`] for this
+    /// # Safety
+    /// The pointer `ptr` must be the result of a call to [`into_raw`][`Arc::into_raw`]
     #[inline]
     pub unsafe fn from_raw(ptr: *const T) -> Self {
         Arc {
@@ -188,10 +185,6 @@ impl<T: ?Sized> Arc<T> {
     }
 
     /// Convert the [`Arc`] to a raw pointer, suitable for use across FFI
-    ///
-    /// Note: This returns a pointer to the data `T`, which is offset in the allocation.
-    ///
-    /// It is recommended to use [`OffsetArc`] for this.
     #[inline]
     pub fn into_raw(this: Self) -> *const T {
         let ptr = Arc::as_ptr(&this);
@@ -236,7 +229,7 @@ impl<T: ?Sized> Arc<T> {
     /// allocation
     #[inline]
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        this.p == other.p
+        core::ptr::eq(this.p.as_ptr(), other.p.as_ptr())
     }
 
     /// Leak this [`Arc<T>`][`Arc`], getting an [`ArcBorrow<'static, T>`][`ArcBorrow`]
@@ -297,8 +290,7 @@ impl<T> Arc<[MaybeUninit<T>]> {
             let ptr = alloc(layout);
             (ptr as *mut atomic::AtomicUsize).write(atomic::AtomicUsize::new(1));
             let slice = ptr::slice_from_raw_parts_mut(ptr.add(offset) as *mut MaybeUninit<T>, len);
-            let result = Arc::from_raw(slice);
-            result
+            Arc::from_raw(slice)
         }
     }
 
@@ -356,7 +348,7 @@ impl<T: ?Sized> Deref for Arc<T> {
     }
 }
 
-impl<T: Clone + ?Sized> Arc<T> {
+impl<T: Clone> Arc<T> {
     /// Makes a mutable reference to the [`Arc`], cloning if necessary
     ///
     /// This is functionally equivalent to [`Arc::make_mut`][mm] from the standard library.
@@ -409,8 +401,7 @@ impl<T: ?Sized> Arc<T> {
         // See the extensive discussion in [1] for why this needs to be Acquire.
         //
         // [1] https://github.com/servo/servo/issues/21186
-        let u = Self::count(this) == 1;
-        u
+        Self::count(this) == 1
     }
 
     /// Gets the number of [`Arc`] pointers to this allocation
@@ -579,8 +570,7 @@ impl<T: ?Sized> fmt::Pointer for Arc<T> {
 impl<T: Default> Default for Arc<T> {
     #[inline]
     fn default() -> Arc<T> {
-        let d = Arc::new(Default::default());
-        d
+        Arc::new(Default::default())
     }
 }
 
@@ -601,14 +591,14 @@ impl<T> From<T> for Arc<T> {
 impl<T: ?Sized> borrow::Borrow<T> for Arc<T> {
     #[inline]
     fn borrow(&self) -> &T {
-        &**self
+        self
     }
 }
 
 impl<T: ?Sized> AsRef<T> for Arc<T> {
     #[inline]
     fn as_ref(&self) -> &T {
-        &**self
+        self
     }
 }
 
@@ -674,9 +664,9 @@ unsafe impl<T, U: ?Sized> unsize::CoerciblePtr<U> for Arc<T> {
         // Fix the provenance by ensuring that of `self` is used.
         let old_layout = ArcInner::layout(&*self);
         let inner = ManuallyDrop::new(self);
-        let p = inner.p.as_ptr() as *mut T;
+        let p = inner.p.as_ptr();
         // Safety: The caller upholds that `new` is an unsized version of the data in the previous ArcInner.
-        let result = Arc::from_raw(p.replace_ptr(new) as *mut U);
+        let result = Arc::from_raw(p.replace_ptr(new));
         debug_assert_eq!(old_layout, ArcInner::layout(&*result));
         result
     }
@@ -695,6 +685,7 @@ unsafe impl<S: SliceDst + ?Sized> SliceDst for ArcInner<S> {
             .pad_to_align()
     }
 
+    #[allow(clippy::let_and_return)]
     fn retype(ptr: ptr::NonNull<[()]>) -> ptr::NonNull<Self> {
         let retype_inner = S::retype(ptr);
         // Safety: the metadata for `S` is the same as for `ArcInner<S>`, since `ArcInner<S>` has `S` as it's last member.
@@ -716,6 +707,7 @@ unsafe impl<S: ?Sized + SliceDst> AllocSliceDst<S> for Arc<S> {
     {
         #[allow(clippy::unit_arg)]
         let init = |ptr| Ok::<(), core::convert::Infallible>(init(ptr));
+        #[allow(unreachable_patterns)]
         match Self::try_new_slice_dst(len, init) {
             Ok(a) => a,
             Err(void) => match void {},

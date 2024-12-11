@@ -79,7 +79,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     where
         T: Clone,
     {
-        if !ArcRef::is_unique(&this) {
+        if !ArcRef::is_unique(this) {
             // Another pointer exists *or* this value is borrowed; clone
             *this = ArcRef::new((**this).clone());
         }
@@ -219,8 +219,9 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
         //TODO: replace with ptr_union...
         let result = ArcRef {
             p: Erasable::erase(NonNull::new_unchecked(
-                (Erasable::erase(NonNull::new_unchecked(p as *mut T)).as_ptr() as usize
-                    | if o { 0b10 } else { 0b00 }) as *mut u8,
+                (Erasable::erase(NonNull::new_unchecked(p as *mut T))
+                    .as_ptr()
+                    .wrapping_byte_add(if o { 0b10 } else { 0b00 })) as *mut u8,
             )),
             phantom: PhantomData,
         };
@@ -237,7 +238,10 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
 
     #[inline]
     pub(crate) fn nn_ptr(&self) -> NonNull<T> {
-        let buf_ptr = (self.p.as_ptr() as usize & !0b11) as *mut u8;
+        let buf_ptr = self
+            .p
+            .as_ptr()
+            .wrapping_byte_sub(self.p.as_ptr() as usize & 0b11);
         let erased = unsafe { Erasable::erase(NonNull::new_unchecked(buf_ptr)) };
         unsafe { Erasable::unerase(erased) }
     }
@@ -384,7 +388,7 @@ impl<'a, T: Erasable> ArcRef<'a, T> {
     /// ```
     #[inline]
     pub fn into_borrow(this: &'a ArcRef<'a, T>) -> ArcRef<'a, T> {
-        ArcRef::from_borrow(ArcRef::borrow_arc(&this))
+        ArcRef::from_borrow(ArcRef::borrow_arc(this))
     }
 
     /// Clone this into an owned [`ArcRef`], with the `'static` lifetime
@@ -566,14 +570,14 @@ impl<'a, T> From<T> for ArcRef<'a, T> {
 impl<'a, T: Erasable> borrow::Borrow<T> for ArcRef<'a, T> {
     #[inline]
     fn borrow(&self) -> &T {
-        &**self
+        self
     }
 }
 
 impl<'a, T: Erasable> AsRef<T> for ArcRef<'a, T> {
     #[inline]
     fn as_ref(&self) -> &T {
-        &**self
+        self
     }
 }
 

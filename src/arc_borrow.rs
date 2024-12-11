@@ -3,10 +3,10 @@ use core::ffi::c_void;
 use core::hash::{Hash, Hasher};
 use core::ops::Deref;
 use core::ptr;
+use core::ptr::NonNull;
 use core::sync::atomic;
 use core::{cmp::Ordering, marker::PhantomData};
 use core::{fmt, mem};
-use core::ptr::NonNull;
 
 use erasable::{Erasable, ErasablePtr};
 
@@ -46,7 +46,7 @@ impl<'a, T: ?Sized> ArcBorrow<'a, T> {
     /// true if they come from the same allocation
     #[inline]
     pub fn ptr_eq(this: Self, other: Self) -> bool {
-        this.p == other.p
+        core::ptr::eq(this.p.as_ptr(), other.p.as_ptr())
     }
 
     /// Similar to deref, but uses the lifetime `'a` rather than the lifetime of
@@ -204,14 +204,14 @@ impl<T: Hash> Hash for ArcBorrow<'_, T> {
 impl<T> Borrow<T> for ArcBorrow<'_, T> {
     #[inline]
     fn borrow(&self) -> &T {
-        &**self
+        self
     }
 }
 
 impl<T> AsRef<T> for ArcBorrow<'_, T> {
     #[inline]
     fn as_ref(&self) -> &T {
-        &**self
+        self
     }
 }
 
